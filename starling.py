@@ -4,13 +4,12 @@ from transformer_lens import HookedTransformer
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 # ================= CONFIGURATION =================
-DEVICE = "cuda:0"
+DEVICE = "cuda"
 DTYPE = torch.bfloat16 
 
 #%%
 
 POLICY_HF_NAME = "berkeley-nest/Starling-LM-7B-alpha"
-REWARD_HF_NAME = "berkeley-nest/Starling-RM-7B-alpha"
 hf_policy = AutoModelForCausalLM.from_pretrained(
     POLICY_HF_NAME,
     torch_dtype=DTYPE,
@@ -34,8 +33,9 @@ model = HookedTransformer.from_pretrained(
 
 #%%
 
+REWARD_HF_NAME = "berkeley-nest/Starling-RM-7B-alpha"
 print(f"Loading Reward Model: {REWARD_HF_NAME}...")
-rm_tokenizer = hf_tokenizer
+# rm_tokenizer = AutoTokenizer.from_pretrained(POLICY_HF_NAME)
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     REWARD_HF_NAME,
     torch_dtype=DTYPE,
@@ -58,14 +58,54 @@ print(prompt_toks)
 
 resp_ids = model.generate(
     prompt_toks,
-    # stop_at_eos=True,
-    # prepend_bos=False,
-    # eos_token_id = model.tokenizer.eos_token_id,
-    # temperature=temperature,
-    # max_new_tokens=max_new_tokens,
     do_sample=True,
     verbose=True,
     max_new_tokens=250
+)
+print(model.tokenizer.decode(resp_ids.squeeze()))
+#%%
+
+messages = [
+    {
+        "role": "user",
+        "content": "What's 1 + 1?",
+    },
+    {
+        "role": "assistant",
+        "content": "2",
+    },
+    {
+        "role": "user",
+        "content": "What's 1 + 2?",
+    },
+    {
+        "role": "assistant",
+        "content": "3",
+    },
+    {
+        "role": "user",
+        "content": "What's 1 + 3?",
+    },
+    {
+        "role": "assistant",
+        "content": "4",
+    },
+    {
+        "role": "user",
+        "content": "What's"
+    }
+]
+prompt_toks = model.tokenizer.apply_chat_template(
+    messages,
+    return_tensors="pt",
+).to(DEVICE)[:, :-1]
+print(model.tokenizer.decode(prompt_toks.squeeze()))
+
+resp_ids = model.generate(
+    prompt_toks,
+    do_sample=True,
+    verbose=True,
+    max_new_tokens=10
 )
 print(model.tokenizer.decode(resp_ids.squeeze()))
 #%%
