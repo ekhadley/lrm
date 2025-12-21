@@ -73,12 +73,30 @@ if generate_probe_dataset:
 
 #%%
 
+PROBES_DIR = Path("./data/probes")
+
 class Probe:
-    def __init__(self, model, layer, act_name):
+    def __init__(self, model, layer, act_name, hash_name=None):
         self.model = model
         self.layer = layer
         self.act_name = act_name
         self.probe = t.zeros((model.cfg.d_model), dtype=t.float32, device=DEVICE, requires_grad=True)
+        
+        # Generate unique hash name if not provided
+        if hash_name is None:
+            timestamp = str(time.time_ns())
+            hash_input = f"{layer}_{act_name}_{timestamp}"
+            self.hash_name = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
+        else:
+            self.hash_name = hash_name
+        
+        # Create probe directory
+        self.save_dir = PROBES_DIR / self.hash_name
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def dtype(self):
+        return self.probe.dtype
 
     def forward(self, act: Tensor) -> Tensor:
         return self.probe @ act
@@ -86,6 +104,50 @@ class Probe:
     def get_pred(self, act: Tensor) -> Tensor:
         probe_pred = round(self.forward(act).item() * 10)
         return probe_pred
+    
+    def save(self, step=None):
+        """Save probe state to disk."""
+        if step is not None:
+            save_path = self.save_dir / f"probe_step_{step}.pt"
+        else:
+            save_path = self.save_dir / "probe_latest.pt"
+        
+        state = {
+            "probe": self.probe.detach().cpu(),
+            "layer": self.layer,
+            "act_name": self.act_name,
+            "hash_name": self.hash_name,
+        }
+        if step is not None:
+            state["step"] = step
+        
+        t.save(state, save_path)
+        return save_path
+    
+    @classmethod
+    def load(cls, model, hash_name, step=None, device=DEVICE):
+        """Load probe from disk."""
+        load_dir = PROBES_DIR / hash_name
+        
+        if step is not None:
+            load_path = load_dir / f"probe_step_{step}.pt"
+        else:
+            load_path = load_dir / "probe_latest.pt"
+        
+        if not load_path.exists():
+            raise FileNotFoundError(f"Probe checkpoint not found: {load_path}")
+        
+        state = t.load(load_path, map_location=device)
+        
+        probe = cls(
+            model=model,
+            layer=state["layer"],
+            act_name=state["act_name"],
+            hash_name=state["hash_name"],
+        )
+        probe.probe = state["probe"].to(device).requires_grad_(True)
+        
+        return probe
 
 train_rating_probe = True
 if train_rating_probe:
@@ -95,15 +157,18 @@ if train_rating_probe:
     batch_size = 32
     epochs = 3
     target_act_seq_pos = -5
+    save_every_steps = 500  # Save checkpoint every N steps
 
     train_dtype = t.float32
     # probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
     probe = Probe(model, probe_layer, probe_act_name)
+    print(f"{green}Probe hash: {probe.hash_name}{endc}")
+    print(f"{green}Saving to: {probe.save_dir}{endc}")
 
     opt = t.optim.AdamW([probe.probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
 
-    run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
-    wandb.init(project="reward_probing", config=run_cfg)
+    run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype), "hash_name":probe.hash_name}
+    wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
     grad_norm = 0.0
     step = 0
@@ -146,9 +211,20 @@ if train_rating_probe:
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
 
+            # Periodic checkpoint saving
+            if (step + 1) % save_every_steps == 0:
+                probe.save(step=step+1)
+                probe.save()  # Also save as latest
+                print(f"\n{cyan}Saved checkpoint at step {step+1}{endc}")
+
             step += 1
             
             t.cuda.empty_cache()
+    
+    # Save final checkpoint
+    probe.save(step=step)
+    probe.save()
+    print(f"{green}Training complete. Final checkpoint saved at step {step}{endc}")
     
     wandb.finish()
     t.cuda.empty_cache()
