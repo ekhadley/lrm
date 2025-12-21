@@ -12,10 +12,15 @@ from tabulate import tabulate
 import torch as t
 from torch import Tensor
 from tqdm import trange, tqdm
+import datasets
+from datasets import Dataset
+
 from transformer_lens import HookedTransformer, ActivationCache, HookedTransformerConfig
 from transformer_lens.hook_points import HookPoint
-from sae_lens import HookedSAETransformer, SAE
+
 import transformers
+from transformers import AutoModelForCausalLM
+
 from transformers import AutoTokenizer
 
 purple = '\x1b[38;2;255;0;255m'
