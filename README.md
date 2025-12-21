@@ -16,7 +16,7 @@ Language models have been trained via some kind of rl on human preference data (
     - model sucks, using different model. Attempting to focus on DPO methods that require no explicit reward model
     - not sure this is possible:
         - dpo is used for contrastive sort of training. The reward you get is implicit, and only meainingful betweens pairs of completions for the same prompt
-    - it is actually possible: the winners and losers were not chosen contrastively, but via [1-10] ratings from gpt4. The ratings are also provided
+    - it is actually possible: the winners and losers were not chosen contrastively, but via [1-10] ratings from gpt4. The ratings are also provided, so those can be our source of 'absolute' rewards
 
 - I have trained 1 probe on the layer 30 intial residual stream on the very last token position of the prompt+model response sequence.
     - it acheives a final rating accuracy (the percentage of the time that its guess is the same as the rating score from the dataset) of 35%

@@ -73,6 +73,20 @@ if generate_probe_dataset:
 
 #%%
 
+class Probe:
+    def __init__(self, model, layer, act_name):
+        self.model = model
+        self.layer = layer
+        self.act_name = act_name
+        self.probe = t.zeros((model.cfg.d_model), dtype=t.float32, device=DEVICE, requires_grad=True)
+
+    def forward(self, act: Tensor) -> Tensor:
+        return self.probe @ act
+    
+    def get_pred(self, act: Tensor) -> Tensor:
+        probe_pred = round(self.forward(act).item() * 10)
+        return probe_pred
+
 train_rating_probe = True
 if train_rating_probe:
     probe_layer = 30
@@ -82,9 +96,10 @@ if train_rating_probe:
     epochs = 3
 
     train_dtype = t.float32
-    probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
+    # probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
+    probe = Probe(model, probe_layer, probe_act_name)
 
-    opt = t.optim.AdamW([probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
+    opt = t.optim.AdamW([probe.probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
 
 
     run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
@@ -113,19 +128,21 @@ if train_rating_probe:
             act = cache[probe_act_name].squeeze().to(train_dtype)
             last_act = act[-1]
 
-            probe_pred = probe @ last_act
-            loss = t.sqrt((normalized_score - probe_pred)**2) / batch_size
+            # probe_pred = probe @ last_act
+            probe_act = probe.forward(last_act)
+            loss = (normalized_score - probe_act)**2 / batch_size
             loss.backward()
             
             if (step+1) % batch_size == 0:
-                grad_norm = probe.grad.detach().norm().item()
+                grad_norm = probe.probe.grad.detach().norm().item()
                 opt.step()
                 opt.zero_grad()
 
             with t.inference_mode():
-                probe_norm = probe.clone().detach().norm().item()
+                probe_norm = probe.probe.clone().detach().norm().item()
                 loss = loss.detach().item() * batch_size
-                pred_acc = 1 if round((probe_pred*10).detach().item()) == score else 0
+                probe_pred = round(probe_act.detach().item() * 10)
+                pred_acc = 1 if probe_pred == score else 0
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
 
@@ -139,9 +156,8 @@ if train_rating_probe:
 
 #%%
 
-def eval_probe(probe, dataset, n_samples, probe_layer=30):
+def eval_probe(probe: Probe, dataset, n_samples):
     """Evaluate probe on dataset samples, returning true and predicted scores."""
-    probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
     true_scores = []
     pred_scores = []
     
@@ -163,13 +179,13 @@ def eval_probe(probe, dataset, n_samples, probe_layer=30):
         with t.inference_mode():
             _, cache = model.run_with_cache(
                 prompt_toks,
-                stop_at_layer=probe_layer+1,
-                names_filter=[probe_act_name]
+                stop_at_layer=probe.layer+1,
+                names_filter=[probe.act_name]
             )
-            act = cache[probe_act_name].squeeze().to(probe.dtype)
+            act = cache[probe.act_name].squeeze().to(probe.dtype)
             last_act = act[-1]
             
-            probe_pred = ((probe @ last_act)).item()
+            probe_pred = probe.get_pred(last_act)
             pred_score = round(probe_pred * 10)
         
         true_scores.append(score)
