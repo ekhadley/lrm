@@ -1,10 +1,12 @@
 # Notes
 - total time: 0 hours
 
-## goal:
+### Summary
 
-## Status:
+## goal
 
-## findings:
+## Status
+
+## findings
 
 ## todo
