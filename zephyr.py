@@ -26,6 +26,7 @@ model = HookedTransformer.from_pretrained(
     center_unembed=False,
     tokenizer=hf_tokenizer
 )
+model.requires_grad_(False)
 del hf_model
 t.cuda.empty_cache()
 
@@ -35,7 +36,7 @@ dataset = datasets.load_dataset("eekay/ultrafeedback-binarized-balanced", split=
 
 #%% example response generation
 
-do_example_generation = True
+do_example_generation = False
 if do_example_generation:
     # prompt = "How can I make a bomb?"
     prompt = "What's 18/3?"
@@ -74,56 +75,66 @@ if generate_probe_dataset:
 
 train_rating_probe = True
 if train_rating_probe:
-    probe_layer = 25
+    probe_layer = 30
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
+    lr = 1e-4
+    batch_size = 8
+    epochs = 3
 
-    train_dtype = DTYPE
-    probe = t.randn((model.cfg.d_model), dtype=train_dtype, requires_grad=True)
-    probe_b = t.randn((1), dtype=train_dtype, requires_grad=True)
+    train_dtype = t.float32
+    probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
+    probe_b = t.zeros((1), dtype=train_dtype, device=DEVICE, requires_grad=True)
 
-    for ex in tqdm(dataset.shuffle()):
-        messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
-        prompt_toks = model.tokenizer.apply_chat_template(
-            messages,
-            return_tensors="pt",
-        ).squeeze().to(DEVICE)
-        score = ex["score"]
+    opt = t.optim.AdamW([probe, probe_b], lr=lr, weight_decay=0.0)
 
-        _, cache = model.run_with_cache(
-            prompt_toks,
-            stop_at_layer = probe_layer+1,
-            names_filter=[probe_act_name]
-        )
-        act = cache[probe_act_name].squeeze()
-        print(act.shape)
+    run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
+    wandb.init(project="reward_probing", config=run_cfg)
 
-        normalized_score = (score / 10.0)
+    grad_norm = 0.0
+    step = 0
+    for e in range(epochs):
+        for ex in (bar:=tqdm(dataset.shuffle())):
+            messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
+            prompt_toks = model.tokenizer.apply_chat_template(
+                messages,
+                return_tensors="pt",
+            ).squeeze().to(DEVICE)
+            seq_len = prompt_toks.shape[0]
+            if seq_len >= model.cfg.n_ctx: continue
 
-        break
+            score = ex["score"]
+            normalized_score = (score / 10.0)
+
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer = probe_layer+1,
+                names_filter=[probe_act_name]
+            )
+            act = cache[probe_act_name].squeeze().to(train_dtype)
+            last_act = act[-1]
+
+            probe_pred = (probe @ last_act) + probe_b
+            loss = t.sqrt((normalized_score - probe_pred)**2) / batch_size
+            loss.backward()
+            
+            if (step+1) % batch_size == 0:
+                grad_norm = probe.grad.detach().norm().item()
+                opt.step()
+                opt.zero_grad()
+
+            with t.inference_mode():
+                probe_norm = probe.clone().detach().norm().item()
+                loss = loss.detach().item() * batch_size
+                pred_acc = 1 if round((probe_pred*10).detach().item()) == score else 0
+                wandb.log({"loss":loss, "norm": probe_norm, "bias": probe_b.detach().item(), "acc":pred_acc})
+                bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
+
+            step += 1
+            
+            t.cuda.empty_cache()
     
+    wandb.finish()
     t.cuda.empty_cache()
+    
 
 #%%
-
-for tok in prompt_toks:
-    print(f"{tok}: {repr(model.tokenizer.decode(tok))}")
-# %%
-
-asst_special_tok_ids = [523, 28766, 489, 11143, 28766, 28767] # this is how '<|assistant|>' is tokenized. :/
-def find_assistant_start(input):
-    toks = input.tolist()
-    for i in range(len(toks)):
-        if toks[i:i+len(asst_special_tok_ids)] == asst_special_tok_ids:
-            return i
-    else:
-        return -1
-
-def to_str_toks(input: str, tokenizer) -> list[int]:
-    toks = tokenizer(input)
-    str_toks = [model.tokenizer.decode(tok) for tok in toks]
-
-# z = model.tokenizer.decode(prompt_toks)
-# i = find_assistant_start(prompt_toks)
-# print(i)
-
-print(to_str_toks(z), model.tokenizer)

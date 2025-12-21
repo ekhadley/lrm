@@ -8,6 +8,7 @@ import plotly.express as px
 from IPython import get_ipython
 import functools
 from tabulate import tabulate
+import wandb
 
 import torch as t
 from torch import Tensor
