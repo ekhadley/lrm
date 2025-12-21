@@ -77,8 +77,8 @@ train_rating_probe = True
 if train_rating_probe:
     probe_layer = 30
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-    lr = 3e-4
-    batch_size = 16
+    lr = 1e-3
+    batch_size = 32
     epochs = 3
 
     train_dtype = t.float32
@@ -139,7 +139,7 @@ if train_rating_probe:
 
 #%%
 
-def eval_probe(probe, probe_b, dataset, n_samples, probe_layer=30):
+def eval_probe(probe, dataset, n_samples, probe_layer=30):
     """Evaluate probe on dataset samples, returning true and predicted scores."""
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
     true_scores = []
@@ -169,7 +169,7 @@ def eval_probe(probe, probe_b, dataset, n_samples, probe_layer=30):
             act = cache[probe_act_name].squeeze().to(probe.dtype)
             last_act = act[-1]
             
-            probe_pred = ((probe @ last_act) + probe_b).item()
+            probe_pred = ((probe @ last_act)).item()
             pred_score = round(probe_pred * 10)
         
         true_scores.append(score)
@@ -177,3 +177,4 @@ def eval_probe(probe, probe_b, dataset, n_samples, probe_layer=30):
         t.cuda.empty_cache()
     
     return true_scores, pred_scores
+
