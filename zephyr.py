@@ -77,15 +77,14 @@ train_rating_probe = True
 if train_rating_probe:
     probe_layer = 30
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-    lr = 1e-4
-    batch_size = 8
+    lr = 3e-4
+    batch_size = 16
     epochs = 3
 
     train_dtype = t.float32
     probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
-    probe_b = t.zeros((1), dtype=train_dtype, device=DEVICE, requires_grad=True)
 
-    opt = t.optim.AdamW([probe, probe_b], lr=lr, weight_decay=0.0)
+    opt = t.optim.AdamW([probe], lr=lr, weight_decay=0.0)
 
     run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
     wandb.init(project="reward_probing", config=run_cfg)
@@ -113,7 +112,7 @@ if train_rating_probe:
             act = cache[probe_act_name].squeeze().to(train_dtype)
             last_act = act[-1]
 
-            probe_pred = (probe @ last_act) + probe_b
+            probe_pred = probe @ last_act
             loss = t.sqrt((normalized_score - probe_pred)**2) / batch_size
             loss.backward()
             
@@ -126,7 +125,7 @@ if train_rating_probe:
                 probe_norm = probe.clone().detach().norm().item()
                 loss = loss.detach().item() * batch_size
                 pred_acc = 1 if round((probe_pred*10).detach().item()) == score else 0
-                wandb.log({"loss":loss, "norm": probe_norm, "bias": probe_b.detach().item(), "acc":pred_acc})
+                wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
 
             step += 1
