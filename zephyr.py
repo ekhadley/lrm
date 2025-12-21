@@ -56,7 +56,7 @@ print(model.tokenizer.decode(resp_ids.squeeze()))
 
 #%%
 
-def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
+def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=False):
     if ufb_dataset is None:
         ufb_dataset = datasets.load_dataset(
             "HuggingFaceH4/ultrafeedback_binarized", 
@@ -82,15 +82,16 @@ def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
         
         prompts.append(prompt)
         responses.append(chosen_response)
-        scores.append(chosen_score)
+        scores.append(round(chosen_score))
         
-        # Get rejected response and score
+        # Get rejected response and score (skip if duplicate of chosen)
         rejected_response = rejected_messages[1]["content"]
         rejected_score = example["score_rejected"]
         
-        prompts.append(prompt)
-        responses.append(rejected_response)
-        scores.append(rejected_score)
+        if rejected_response != chosen_response:
+            prompts.append(prompt)
+            responses.append(rejected_response)
+            scores.append(round(rejected_score))
     
     probe_dataset = Dataset.from_dict({
         "prompt": prompts,
@@ -98,9 +99,32 @@ def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
         "score": scores,
     })
     
+    if balance_ratings:
+        # Group indices by rating
+        rating_indices = {r: [] for r in range(1, 11)}
+        for i, score in enumerate(scores):
+            if 1 <= score <= 10:
+                rating_indices[score].append(i)
+        
+        # Find minimum count across all ratings that have at least one example
+        counts = [len(indices) for indices in rating_indices.values() if len(indices) > 0]
+        min_count = min(counts) if counts else 0
+        
+        # Sample min_count indices from each rating
+        balanced_indices = []
+        for r in range(1, 11):
+            if len(rating_indices[r]) >= min_count:
+                balanced_indices.extend(random.sample(rating_indices[r], min_count))
+        
+        # Shuffle and select
+        random.shuffle(balanced_indices)
+        probe_dataset = probe_dataset.select(balanced_indices)
+    
     return probe_dataset
 
-dataset = make_probe_dataset(ufb, "train_prefs")
+dataset = make_probe_dataset(balance_ratings=True)
+print(dataset)
+print(len(dataset))
 print(dataset[0])
 print(dataset[1])
 print(dataset[2])
