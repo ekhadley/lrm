@@ -84,7 +84,8 @@ if train_rating_probe:
     train_dtype = t.float32
     probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
 
-    opt = t.optim.AdamW([probe], lr=lr, weight_decay=0.0)
+    opt = t.optim.AdamW([probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
+
 
     run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
     wandb.init(project="reward_probing", config=run_cfg)
@@ -137,3 +138,42 @@ if train_rating_probe:
     
 
 #%%
+
+def eval_probe(probe, probe_b, dataset, n_samples, probe_layer=30):
+    """Evaluate probe on dataset samples, returning true and predicted scores."""
+    probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
+    true_scores = []
+    pred_scores = []
+    
+    for i, ex in enumerate(tqdm(dataset.shuffle(), total=n_samples)):
+        if i >= n_samples:
+            break
+            
+        messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
+        prompt_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(DEVICE)
+        seq_len = prompt_toks.shape[0]
+        if seq_len >= model.cfg.n_ctx:
+            continue
+
+        score = ex["score"]
+        
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer=probe_layer+1,
+                names_filter=[probe_act_name]
+            )
+            act = cache[probe_act_name].squeeze().to(probe.dtype)
+            last_act = act[-1]
+            
+            probe_pred = ((probe @ last_act) + probe_b).item()
+            pred_score = round(probe_pred * 10)
+        
+        true_scores.append(score)
+        pred_scores.append(pred_score)
+        t.cuda.empty_cache()
+    
+    return true_scores, pred_scores
