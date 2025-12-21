@@ -7,13 +7,15 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 DEVICE = "cuda"
 DTYPE = torch.bfloat16 
 
+#%%
+
 # Starling-LM is based on OpenChat/Mistral
 POLICY_HF_NAME = "berkeley-nest/Starling-LM-7B-alpha"
 # Starling-RM is based on Llama-2
 REWARD_HF_NAME = "berkeley-nest/Starling-RM-7B-alpha"
 
 # ================= MODEL LOADING =================
-
+#%%
 print(f"Loading Policy Model (HF): {POLICY_HF_NAME}...")
 # 1. Load the HF model explicitly first
 hf_policy = AutoModelForCausalLM.from_pretrained(
@@ -22,6 +24,7 @@ hf_policy = AutoModelForCausalLM.from_pretrained(
     # device_map=DEVICE
     # device_map="cpu"
 )
+#%%
 hf_tokenizer = AutoTokenizer.from_pretrained(POLICY_HF_NAME)
 
 #%%
@@ -41,14 +44,17 @@ model = HookedTransformer.from_pretrained(
     tokenizer=hf_tokenizer     # Ensure we use the correct Starling tokenizer
 )
 
+#%%
+
 print(f"Loading Reward Model: {REWARD_HF_NAME}...")
 # 3. Load Reward Model (Standard HF)
-# Note: This is Llama-2 based, so it has its own tokenizer
-rm_tokenizer = AutoTokenizer.from_pretrained(REWARD_HF_NAME)
+# Reuse the policy tokenizer - Starling-RM's tokenizer config is broken,
+# and both models likely share compatible tokenization
+rm_tokenizer = hf_tokenizer
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     REWARD_HF_NAME,
-    torch_dtype=DTYPE,
-    device_map=DEVICE
+    # torch_dtype=DTYPE,
+    # device_map=DEVICE
 )
 reward_model.eval()
 
