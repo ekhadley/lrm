@@ -49,6 +49,96 @@ if IPYTHON is not None:
 
 # ============================= model stuff ============================= #
 
+
+
+
+
+# =========================== dataset stuff =========================== #
+
+def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=False):
+    if ufb_dataset is None:
+        ufb_dataset = datasets.load_dataset(
+            "HuggingFaceH4/ultrafeedback_binarized", 
+            split=split
+        )
+    
+    prompts = []
+    responses = []
+    scores = []
+    
+    for example in tqdm(ufb_dataset, desc="Building probe dataset"):
+        # Extract prompt from the first message (user message)
+        # The chosen/rejected fields are lists of message dicts
+        chosen_messages = example["chosen"]
+        rejected_messages = example["rejected"]
+        
+        # Get prompt from user message (first message in the conversation)
+        prompt = chosen_messages[0]["content"]
+        
+        # Get chosen response and score
+        chosen_response = chosen_messages[1]["content"]
+        chosen_score = example["score_chosen"]
+        
+        prompts.append(prompt)
+        responses.append(chosen_response)
+        scores.append(round(chosen_score))
+        
+        # Get rejected response and score (skip if duplicate of chosen)
+        rejected_response = rejected_messages[1]["content"]
+        rejected_score = example["score_rejected"]
+        
+        if rejected_response != chosen_response:
+            prompts.append(prompt)
+            responses.append(rejected_response)
+            scores.append(round(rejected_score))
+    
+    probe_dataset = Dataset.from_dict({
+        "prompt": prompts,
+        "response": responses,
+        "score": scores,
+    })
+    
+    if balance_ratings:
+        # Group indices by rating
+        rating_indices = {r: [] for r in range(1, 11)}
+        for i, score in enumerate(scores):
+            if 1 <= score <= 10:
+                rating_indices[score].append(i)
+        
+        # Find minimum count across all ratings that have at least one example
+        counts = [len(indices) for indices in rating_indices.values() if len(indices) > 0]
+        min_count = min(counts) if counts else 0
+        
+        # Sample min_count indices from each rating
+        balanced_indices = []
+        for r in range(1, 11):
+            if len(rating_indices[r]) >= min_count:
+                balanced_indices.extend(random.sample(rating_indices[r], min_count))
+        
+        # Shuffle and select
+        random.shuffle(balanced_indices)
+        probe_dataset = probe_dataset.select(balanced_indices)
+    
+    return probe_dataset
+
+# ======================= random stuff ========================== #
+
+asst_special_tok_ids = [523, 28766, 489, 11143, 28766, 28767] # this is how '<|assistant|>' is tokenized. :/
+def find_assistant_start(input):
+    toks = input.tolist()
+    for i in range(len(toks)):
+        if toks[i:i+len(asst_special_tok_ids)] == asst_special_tok_ids:
+            return i
+    else:
+        return -1
+
+def to_str_toks(input: str, tokenizer) -> list[int]:
+    toks = tokenizer(input)
+    str_toks = [model.tokenizer.decode()]
+    
+
+# ============================ plotting stuff ============================ #
+
 # yaxis_range = [lower, upper]
 def line(y, renderer=None, **kwargs):
     '''
@@ -108,66 +198,6 @@ def line(y, renderer=None, **kwargs):
 update_layout_set = {"xaxis_range", "yaxis_range", "hovermode", "xaxis_title", "yaxis_title", "colorbar", "colorscale", "coloraxis", "title_x", "bargap", "bargroupgap", "xaxis_tickformat", "yaxis_tickformat", "title_y", "legend_title_text", "xaxis_showgrid", "xaxis_gridwidth", "xaxis_gridcolor", "yaxis_showgrid", "yaxis_gridwidth", "yaxis_gridcolor", "showlegend", "xaxis_tickmode", "yaxis_tickmode", "margin", "xaxis_visible", "yaxis_visible", "bargap", "bargroupgap", "coloraxis_showscale", "xaxis_tickangle", "yaxis_scaleanchor", "xaxis_tickfont", "yaxis_tickfont"}
 
 update_traces_set = {"textposition"}
-
-def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
-    """
-    Create a probe dataset from the UltraFeedback binarized dataset.
-    
-    The probe dataset contains 3 columns:
-    - prompt: The user's prompt/question
-    - response: The assistant's response (from both chosen and rejected)
-    - score: The score for that response
-    
-    Args:
-        ufb_dataset: The ultrafeedback_binarized dataset. If None, loads it.
-        split: The split to use when loading the dataset (default: "train_prefs")
-    
-    Returns:
-        Dataset with columns: prompt, response, score
-    """
-    if ufb_dataset is None:
-        ufb_dataset = datasets.load_dataset(
-            "HuggingFaceH4/ultrafeedback_binarized", 
-            split=split
-        )
-    
-    prompts = []
-    responses = []
-    scores = []
-    
-    for example in tqdm(ufb_dataset, desc="Building probe dataset"):
-        # Extract prompt from the first message (user message)
-        # The chosen/rejected fields are lists of message dicts
-        chosen_messages = example["chosen"]
-        rejected_messages = example["rejected"]
-        
-        # Get prompt from user message (first message in the conversation)
-        prompt = chosen_messages[0]["content"]
-        
-        # Get chosen response and score
-        chosen_response = chosen_messages[1]["content"]
-        chosen_score = example["score_chosen"]
-        
-        prompts.append(prompt)
-        responses.append(chosen_response)
-        scores.append(chosen_score)
-        
-        # Get rejected response and score
-        rejected_response = rejected_messages[1]["content"]
-        rejected_score = example["score_rejected"]
-        
-        prompts.append(prompt)
-        responses.append(rejected_response)
-        scores.append(rejected_score)
-    
-    probe_dataset = Dataset.from_dict({
-        "prompt": prompts,
-        "response": responses,
-        "score": scores,
-    })
-    
-    return probe_dataset
-
 
 def to_numpy(tensor):
     """
