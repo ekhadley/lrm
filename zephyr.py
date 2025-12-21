@@ -91,16 +91,16 @@ train_rating_probe = True
 if train_rating_probe:
     probe_layer = 30
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-    lr = 1e-3
+    lr = 1e-4
     batch_size = 32
     epochs = 3
+    target_act_seq_pos = -5
 
     train_dtype = t.float32
     # probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
     probe = Probe(model, probe_layer, probe_act_name)
 
     opt = t.optim.AdamW([probe.probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
-
 
     run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype)}
     wandb.init(project="reward_probing", config=run_cfg)
@@ -126,10 +126,10 @@ if train_rating_probe:
                 names_filter=[probe_act_name]
             )
             act = cache[probe_act_name].squeeze().to(train_dtype)
-            last_act = act[-1]
+            target_act = act[target_act_seq_pos]
 
-            # probe_pred = probe @ last_act
-            probe_act = probe.forward(last_act)
+            # probe_pred = probe @ target_act
+            probe_act = probe.forward(target_act)
             loss = (normalized_score - probe_act)**2 / batch_size
             loss.backward()
             
@@ -183,9 +183,9 @@ def eval_probe(probe: Probe, dataset, n_samples):
                 names_filter=[probe.act_name]
             )
             act = cache[probe.act_name].squeeze().to(probe.dtype)
-            last_act = act[-1]
+            target_act = act[-1]
             
-            probe_pred = probe.get_pred(last_act)
+            probe_pred = probe.get_pred(target_act)
             pred_score = round(probe_pred * 10)
         
         true_scores.append(score)
