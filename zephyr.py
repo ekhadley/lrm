@@ -56,13 +56,54 @@ print(model.tokenizer.decode(resp_ids.squeeze()))
 
 #%%
 
-counts = {}
-# chosen = [counts[i]ufb[i]["score_chosen"] for i in range(10)]
-for i in trange(len(ufb)):
-    score_chosen = ufb[i]["score_chosen"]
-    # score_rejected = ufb[i]["score_rejected"]
-    count = counts.get(score_chosen, 0)
-    counts[score_chosen] = count+1
+def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
+    if ufb_dataset is None:
+        ufb_dataset = datasets.load_dataset(
+            "HuggingFaceH4/ultrafeedback_binarized", 
+            split=split
+        )
+    
+    prompts = []
+    responses = []
+    scores = []
+    
+    for example in tqdm(ufb_dataset, desc="Building probe dataset"):
+        # Extract prompt from the first message (user message)
+        # The chosen/rejected fields are lists of message dicts
+        chosen_messages = example["chosen"]
+        rejected_messages = example["rejected"]
+        
+        # Get prompt from user message (first message in the conversation)
+        prompt = chosen_messages[0]["content"]
+        
+        # Get chosen response and score
+        chosen_response = chosen_messages[1]["content"]
+        chosen_score = example["score_chosen"]
+        
+        prompts.append(prompt)
+        responses.append(chosen_response)
+        scores.append(chosen_score)
+        
+        # Get rejected response and score
+        rejected_response = rejected_messages[1]["content"]
+        rejected_score = example["score_rejected"]
+        
+        prompts.append(prompt)
+        responses.append(rejected_response)
+        scores.append(rejected_score)
+    
+    probe_dataset = Dataset.from_dict({
+        "prompt": prompts,
+        "response": responses,
+        "score": scores,
+    })
+    
+    return probe_dataset
+
+dataset = make_probe_dataset(ufb, "train_prefs")
+print(dataset[0])
+print(dataset[1])
+print(dataset[2])
 
 
 #%%

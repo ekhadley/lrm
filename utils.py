@@ -109,6 +109,66 @@ update_layout_set = {"xaxis_range", "yaxis_range", "hovermode", "xaxis_title", "
 
 update_traces_set = {"textposition"}
 
+def make_probe_dataset(ufb_dataset=None, split="train_prefs"):
+    """
+    Create a probe dataset from the UltraFeedback binarized dataset.
+    
+    The probe dataset contains 3 columns:
+    - prompt: The user's prompt/question
+    - response: The assistant's response (from both chosen and rejected)
+    - score: The score for that response
+    
+    Args:
+        ufb_dataset: The ultrafeedback_binarized dataset. If None, loads it.
+        split: The split to use when loading the dataset (default: "train_prefs")
+    
+    Returns:
+        Dataset with columns: prompt, response, score
+    """
+    if ufb_dataset is None:
+        ufb_dataset = datasets.load_dataset(
+            "HuggingFaceH4/ultrafeedback_binarized", 
+            split=split
+        )
+    
+    prompts = []
+    responses = []
+    scores = []
+    
+    for example in tqdm(ufb_dataset, desc="Building probe dataset"):
+        # Extract prompt from the first message (user message)
+        # The chosen/rejected fields are lists of message dicts
+        chosen_messages = example["chosen"]
+        rejected_messages = example["rejected"]
+        
+        # Get prompt from user message (first message in the conversation)
+        prompt = chosen_messages[0]["content"]
+        
+        # Get chosen response and score
+        chosen_response = chosen_messages[1]["content"]
+        chosen_score = example["score_chosen"]
+        
+        prompts.append(prompt)
+        responses.append(chosen_response)
+        scores.append(chosen_score)
+        
+        # Get rejected response and score
+        rejected_response = rejected_messages[1]["content"]
+        rejected_score = example["score_rejected"]
+        
+        prompts.append(prompt)
+        responses.append(rejected_response)
+        scores.append(rejected_score)
+    
+    probe_dataset = Dataset.from_dict({
+        "prompt": prompts,
+        "response": responses,
+        "score": scores,
+    })
+    
+    return probe_dataset
+
+
 def to_numpy(tensor):
     """
     Helper function to convert a tensor to a numpy array. Also works on lists, tuples, and numpy arrays.
