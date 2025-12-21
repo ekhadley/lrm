@@ -1,70 +1,85 @@
-"""
-Starling-7B Internal Satisfaction Probe Data Generator
-Hardware: A100 40GB (or similar high-VRAM setup)
-"""
-
+#%%
 import torch
 from transformer_lens import HookedTransformer
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from tqdm import tqdm
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 # ================= CONFIGURATION =================
-# We use bfloat16 for A100s to save memory/compute
 DEVICE = "cuda"
 DTYPE = torch.bfloat16 
 
-# Starling-LM is Mistral-based; Starling-RM is Llama-2-based
-POLICY_NAME = "berkeley-nest/Starling-LM-7B-alpha"
-REWARD_NAME = "berkeley-nest/Starling-RM-7B-alpha"
+# Starling-LM is based on OpenChat/Mistral
+POLICY_HF_NAME = "berkeley-nest/Starling-LM-7B-alpha"
+# Starling-RM is based on Llama-2
+REWARD_HF_NAME = "berkeley-nest/Starling-RM-7B-alpha"
 
 # ================= MODEL LOADING =================
-print(f"Loading Policy Model: {POLICY_NAME}...")
-# HookedTransformer loads the policy for mechanistic interpretation
+
+print(f"Loading Policy Model (HF): {POLICY_HF_NAME}...")
+# 1. Load the HF model explicitly first
+hf_policy = AutoModelForCausalLM.from_pretrained(
+    POLICY_HF_NAME,
+    torch_dtype=DTYPE,
+    # device_map=DEVICE
+    # device_map="cpu"
+)
+hf_tokenizer = AutoTokenizer.from_pretrained(POLICY_HF_NAME)
+
+#%%
+
+print("Wrapping into HookedTransformer...")
+# 2. Inject into HookedTransformer
+# We tell it this is "mistral-7b" so it knows how to build the HookPoints, 
+# but we give it our own loaded weights via 'hf_model'.
 model = HookedTransformer.from_pretrained(
-    POLICY_NAME,
-    device=DEVICE,
+    "mistral-7b",              # The architecture alias
+    hf_model=hf_policy,        # The actual weights we want
+    device="cpu",
     dtype=DTYPE,
-    fold_ln=False,
+    fold_ln=False,             # Disable folding to prevent weight mismatches
     center_writing_weights=False,
-    center_unembed=False
+    center_unembed=False,
+    tokenizer=hf_tokenizer     # Ensure we use the correct Starling tokenizer
 )
 
-print(f"Loading Reward Model: {REWARD_NAME}...")
-# We use standard HF for the RM since we treat it as a black-box oracle
-rm_tokenizer = AutoTokenizer.from_pretrained(REWARD_NAME)
+print(f"Loading Reward Model: {REWARD_HF_NAME}...")
+# 3. Load Reward Model (Standard HF)
+# Note: This is Llama-2 based, so it has its own tokenizer
+rm_tokenizer = AutoTokenizer.from_pretrained(REWARD_HF_NAME)
 reward_model = AutoModelForSequenceClassification.from_pretrained(
-    REWARD_NAME,
+    REWARD_HF_NAME,
     torch_dtype=DTYPE,
     device_map=DEVICE
 )
 reward_model.eval()
 
+#%%
+
 # ================= HELPER FUNCTIONS =================
 
 def get_starling_prompt(user_query):
-    """Formats prompt using the specific OpenChat template Starling expects."""
+    # Starling uses the OpenChat template
     return f"GPT4 Correct User: {user_query}<|end_of_turn|>GPT4 Correct Assistant:"
 
 def get_dense_rewards(prompt_str, completion_str):
     """
-    Runs the Reward Model on every prefix of the completion to get a 
-    trajectory of 'how good the generation is getting' token-by-token.
+    Runs the Reward Model on every prefix of the completion.
     """
     # Tokenize full sequence with RM tokenizer
+    # Note: Starling-RM (Llama) and Starling-LM (Mistral) tokenizers are different!
+    # We must operate on raw text strings to bridge them.
     full_text = prompt_str + completion_str
     inputs = rm_tokenizer(full_text, return_tensors="pt").to(DEVICE)
     input_ids = inputs.input_ids[0]
     
-    # Find where the prompt ends so we only score the completion steps
+    # Find where the prompt ends in the RM's tokenization
     prompt_ids = rm_tokenizer(prompt_str, add_special_tokens=False).input_ids
     start_idx = len(prompt_ids)
     
     rewards = []
     
-    # Iterate through the completion tokens
-    # Note: This is O(N^2) relative to seq len, but fast enough for research batch sizes
     print("Calculating dense rewards...")
     with torch.no_grad():
+        # Iterate through the completion tokens
         for i in range(start_idx, len(input_ids)):
             # Slice the sequence up to current token
             curr_input = input_ids[:i+1].unsqueeze(0)
@@ -81,46 +96,55 @@ def get_dense_rewards(prompt_str, completion_str):
 def run_experiment(user_query):
     formatted_prompt = get_starling_prompt(user_query)
     
-    # 1. Generate Completion & Capture Activations
-    # We use run_with_cache to get the internal state
+    # 1. Generate & Capture
     print(f"Generating for: '{user_query}'")
     
-    output, cache = model.run_with_cache(
+    # We use the wrapped model for generation to ensure activations match
+    output_tokens = model.generate(
         formatted_prompt,
         max_new_tokens=50,
-        stop_at_eos=True
+        stop_at_eos=True,
+        verbose=False
     )
     
-    generated_text = output[len(formatted_prompt):]
+    # Decode to text to bridge the tokenizer gap
+    generated_text = model.tokenizer.decode(
+        output_tokens[0, len(model.tokenizer.encode(formatted_prompt)):], 
+        skip_special_tokens=True
+    )
     print(f"Generated: {generated_text}")
 
-    # 2. Extract Residual Stream (The 'Implicit' State)
-    # Shape: [batch, pos, d_model] -> We want the final layer's residual stream
-    # You might want to sweep layers: 'blocks.15.hook_resid_post', etc.
-    target_layer = 16 # Middle-late layers often hold 'truth' features
+    # 2. Run with Cache to get Activations
+    # We re-run the forward pass on the full generated sequence
+    # This is safer than hooking 'generate' which is tricky in TransformerLens
+    full_generated_prompts = model.tokenizer.decode(output_tokens[0])
+    
+    _, cache = model.run_with_cache(full_generated_prompts)
+    
+    # Target Layer: Middle-late layers (e.g., 16 out of 32)
+    target_layer = 16 
     layer_name = f"blocks.{target_layer}.hook_resid_post"
     
-    # Get activations only for the completion tokens
-    # (We slice based on the prompt length in tokens)
-    prompt_len_tokens = model.to_tokens(formatted_prompt).shape[1]
+    # Slice out the prompt tokens, keep only completion tokens
+    prompt_len = len(model.tokenizer.encode(formatted_prompt))
+    # Shape: [batch, pos, d_model]
+    activations = cache[layer_name][0, prompt_len-1:-1, :].cpu()
     
-    # cache[name] is [batch, seq_len, d_model]
-    # We take the activations corresponding to the *generation* steps
-    activations = cache[layer_name][0, prompt_len_tokens-1:-1, :].cpu()
-    
-    # 3. Get Ground Truth Rewards (The 'Explicit' Signal)
+    # 3. Get Ground Truth Rewards
     rewards = get_dense_rewards(formatted_prompt, generated_text)
     
-    # 4. Align and Save
-    # Ensure lengths match (sometimes tokenization differs slightly between models)
+    # 4. Sync Lengths (Tokenizer mismatch handling)
+    # Because RM (Llama) and LM (Mistral) tokenizers differ, the number of tokens
+    # in the completion might differ slightly. We min-clip them or interpolate.
+    # For a first pass, min-clip is fine, but be aware of alignment drift.
     min_len = min(len(activations), len(rewards))
     
     data_points = []
     for i in range(min_len):
         data_points.append({
             "token_idx": i,
-            "activation": activations[i].numpy(), # The X (feature)
-            "reward": rewards[i]                  # The Y (target)
+            "activation": activations[i].numpy(), 
+            "reward": rewards[i]
         })
         
     return data_points
@@ -130,9 +154,6 @@ def run_experiment(user_query):
 test_prompt = "Explain why it is important to eat rocks."
 data = run_experiment(test_prompt)
 
-# Now you have a dataset to train your probe!
-# X = [d['activation'] for d in data]
-# Y = [d['reward'] for d in data]
-print(f"Captured {len(data)} tokens of data.")
-print(f"First token reward: {data[0]['reward']:.4f}")
-print(f"Last token reward: {data[-1]['reward']:.4f}")
+print(f"Captured {len(data)} aligned tokens.")
+if len(data) > 0:
+    print(f"Reward Trace: {[d['reward'] for d in data]}")
