@@ -56,6 +56,13 @@ print(model.tokenizer.decode(resp_ids.squeeze()))
 
 #%%
 
+counts = {}
+# chosen = [counts[i]ufb[i]["score_chosen"] for i in range(10)]
+for i in trange(len(ufb)):
+    score_chosen = ufb[i]["score_chosen"]
+    # score_rejected = ufb[i]["score_rejected"]
+    count = counts.get(score_chosen, 0)
+    counts[score_chosen] = count+1
 
 
 #%%
