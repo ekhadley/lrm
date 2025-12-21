@@ -56,7 +56,6 @@ prompt_toks = model.tokenizer.apply_chat_template(
 ).to(DEVICE)
 print(prompt_toks)
 
-resp = model.generate()
 resp_ids = model.generate(
     prompt_toks,
     # stop_at_eos=True,
