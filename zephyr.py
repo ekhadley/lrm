@@ -73,81 +73,7 @@ if generate_probe_dataset:
 
 #%%
 
-PROBES_DIR = Path("./data/probes")
-
-class Probe:
-    def __init__(self, model, layer, act_name, hash_name=None):
-        self.model = model
-        self.layer = layer
-        self.act_name = act_name
-        self.probe = t.zeros((model.cfg.d_model), dtype=t.float32, device=DEVICE, requires_grad=True)
-        
-        # Generate unique hash name if not provided
-        if hash_name is None:
-            timestamp = str(time.time_ns())
-            hash_input = f"{layer}_{act_name}_{timestamp}"
-            self.hash_name = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
-        else:
-            self.hash_name = hash_name
-        
-        # Create probe directory
-        self.save_dir = PROBES_DIR / self.hash_name
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-
-    @property
-    def dtype(self):
-        return self.probe.dtype
-
-    def forward(self, act: Tensor) -> Tensor:
-        return self.probe @ act
-    
-    def get_pred(self, act: Tensor) -> Tensor:
-        probe_pred = round(self.forward(act).item() * 10)
-        return probe_pred
-    
-    def save(self, step=None):
-        """Save probe state to disk."""
-        if step is not None:
-            save_path = self.save_dir / f"probe_step_{step}.pt"
-        else:
-            save_path = self.save_dir / "probe_latest.pt"
-        
-        state = {
-            "probe": self.probe.detach().cpu(),
-            "layer": self.layer,
-            "act_name": self.act_name,
-            "hash_name": self.hash_name,
-        }
-        if step is not None:
-            state["step"] = step
-        
-        t.save(state, save_path)
-        return save_path
-    
-    @classmethod
-    def load(cls, model, hash_name, step=None, device=DEVICE):
-        """Load probe from disk."""
-        load_dir = PROBES_DIR / hash_name
-        
-        if step is not None:
-            load_path = load_dir / f"probe_step_{step}.pt"
-        else:
-            load_path = load_dir / "probe_latest.pt"
-        
-        if not load_path.exists():
-            raise FileNotFoundError(f"Probe checkpoint not found: {load_path}")
-        
-        state = t.load(load_path, map_location=device)
-        
-        probe = cls(
-            model=model,
-            layer=state["layer"],
-            act_name=state["act_name"],
-            hash_name=state["hash_name"],
-        )
-        probe.probe = state["probe"].to(device).requires_grad_(True)
-        
-        return probe
+from utils import Probe
 
 train_rating_probe = True
 if train_rating_probe:
@@ -160,7 +86,6 @@ if train_rating_probe:
     save_every_steps = 500  # Save checkpoint every N steps
 
     train_dtype = t.float32
-    # probe = t.zeros((model.cfg.d_model), dtype=train_dtype, device=DEVICE, requires_grad=True)
     probe = Probe(model, probe_layer, probe_act_name)
     print(f"{green}Probe hash: {probe.hash_name}{endc}")
     print(f"{green}Saving to: {probe.save_dir}{endc}")
@@ -193,9 +118,8 @@ if train_rating_probe:
             act = cache[probe_act_name].squeeze().to(train_dtype)
             target_act = act[target_act_seq_pos]
 
-            # probe_pred = probe @ target_act
             probe_act = probe.forward(target_act)
-            loss = (normalized_score - probe_act)**2 / batch_size
+            loss = t.abs(normalized_score - probe_act) / batch_size
             loss.backward()
             
             if (step+1) % batch_size == 0:
@@ -211,18 +135,13 @@ if train_rating_probe:
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
 
-            # Periodic checkpoint saving
             if (step + 1) % save_every_steps == 0:
-                probe.save(step=step+1)
-                probe.save()  # Also save as latest
-                print(f"\n{cyan}Saved checkpoint at step {step+1}{endc}")
+                probe.save()
 
             step += 1
             
             t.cuda.empty_cache()
     
-    # Save final checkpoint
-    probe.save(step=step)
     probe.save()
     print(f"{green}Training complete. Final checkpoint saved at step {step}{endc}")
     
@@ -231,6 +150,7 @@ if train_rating_probe:
     
 
 #%%
+
 
 def eval_probe(probe: Probe, dataset, n_samples):
     """Evaluate probe on dataset samples, returning true and predicted scores."""
@@ -261,12 +181,25 @@ def eval_probe(probe: Probe, dataset, n_samples):
             act = cache[probe.act_name].squeeze().to(probe.dtype)
             target_act = act[-1]
             
-            probe_pred = probe.get_pred(target_act)
-            pred_score = round(probe_pred * 10)
+            # probe_pred = probe.get_pred(target_act)
+            probe_act = probe.forward(target_act)
         
         true_scores.append(score)
-        pred_scores.append(pred_score)
-        t.cuda.empty_cache()
-    
+        pred_scores.append(probe_act*10)
+
+    t.cuda.empty_cache()
     return true_scores, pred_scores
 
+probe = Probe.load(model, "d81ea315a6b6")
+scores, preds = eval_probe(probe, dataset, 256)
+
+#%%
+px.scatter(
+    x=scores,
+    y=preds,
+    range_y=[0,12],
+    range_x=[0,12],
+    height=1000, width=1000,
+    labels={"x":"True Score", "y":"Probe Prediction"},
+    title="scatterplot of predicted vs real completion scores"
+)

@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 data
+wandb
 
 log.md
 paper.md
