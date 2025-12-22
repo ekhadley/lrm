@@ -1,5 +1,5 @@
 # Do language models model expected rewards?
-- total time: 5 hrs
+- total time: 7 hrs
 ### Summary
 Language models have been trained via some kind of rl on human preference data (or ai preference data). Language models thus are trained to steer their outputs to get high reward from the supervision process. (This used to be done with explicit reward models but now is done via direct optimization of the models, using their own knowledge as implicit reward models, but this isnt a load bearing fact.) Models most likely represent some form of their expected reward during generation. Can we try and elicit this information from the model? What effects the model's estimate of reward? How do the user's messages factor in?
 
@@ -17,6 +17,8 @@ Language models have been trained via some kind of rl on human preference data (
     - not sure this is possible:
         - dpo is used for contrastive sort of training. The reward you get is implicit, and only meainingful betweens pairs of completions for the same prompt
     - it is actually possible: the winners and losers were not chosen contrastively, but via [1-10] ratings from gpt4. The ratings are also provided, so those can be our source of 'absolute' rewards
+
+- switching to 
 
 - I have trained 1 probe on the layer 30 intial residual stream on the very last token position of the prompt+model response sequence.
     - it acheives a final rating accuracy (the percentage of the time that its guess is the same as the rating score from the dataset) of 35%

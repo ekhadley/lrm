@@ -203,3 +203,124 @@ px.scatter(
     labels={"x":"True Score", "y":"Probe Prediction"},
     title="scatterplot of predicted vs real completion scores"
 )
+
+#%% Wandb Sweep for Probe Training
+
+def benchmark_probe(probe: Probe, dataset, n_samples=256):
+    """Evaluate probe MSE on n_samples examples. Returns MSE of (true - pred) in 1-10 scale."""
+    errors_sq = []
+    
+    samples_seen = 0
+    for ex in tqdm(dataset.shuffle(), total=n_samples, desc="Benchmarking"):
+        if samples_seen >= n_samples:
+            break
+            
+        messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
+        prompt_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(DEVICE)
+        
+        if prompt_toks.shape[0] >= model.cfg.n_ctx:
+            continue
+
+        true_score = ex["score"]  # 1-10
+        
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer=probe.layer+1,
+                names_filter=[probe.act_name]
+            )
+            act = cache[probe.act_name].squeeze().to(probe.dtype)
+            target_act = act[-5]  # fixed seq pos
+            pred_score = (probe.forward(target_act) * 10).item()  # 1-10, not rounded
+        
+        error_sq = (true_score - pred_score) ** 2
+        errors_sq.append(error_sq)
+        samples_seen += 1
+
+    t.cuda.empty_cache()
+    mse = sum(errors_sq) / len(errors_sq)
+    return mse
+
+
+def train_probe_for_sweep():
+    """Training function for wandb sweep."""
+    run = wandb.init()
+    config = wandb.config
+    
+    lr = config.lr
+    batch_size = config.batch_size
+    epochs = config.epochs
+    
+    # Fixed params
+    probe_layer = 30
+    probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
+    target_act_seq_pos = -5
+    train_dtype = t.float32
+    
+    probe = Probe(model, probe_layer, probe_act_name)
+    opt = t.optim.AdamW([probe.probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
+    
+    step = 0
+    for e in range(epochs):
+        for ex in tqdm(dataset.shuffle(), desc=f"Epoch {e}"):
+            messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
+            prompt_toks = model.tokenizer.apply_chat_template(
+                messages,
+                return_tensors="pt",
+            ).squeeze().to(DEVICE)
+            
+            if prompt_toks.shape[0] >= model.cfg.n_ctx:
+                continue
+
+            score = ex["score"]
+            normalized_score = (score / 10.0)
+
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer=probe_layer+1,
+                names_filter=[probe_act_name]
+            )
+            act = cache[probe_act_name].squeeze().to(train_dtype)
+            target_act = act[target_act_seq_pos]
+
+            probe_act = probe.forward(target_act)
+            loss = t.abs(normalized_score - probe_act) / batch_size
+            loss.backward()
+            
+            if (step+1) % batch_size == 0:
+                opt.step()
+                opt.zero_grad()
+
+            step += 1
+            t.cuda.empty_cache()
+    
+    # Final optimizer step for any remaining gradients
+    opt.step()
+    opt.zero_grad()
+    
+    # Benchmark and log MSE
+    mse = benchmark_probe(probe, dataset, n_samples=256)
+    wandb.log({"mse": mse})
+    
+    probe.save()
+    wandb.finish()
+    t.cuda.empty_cache()
+
+
+sweep_config = {
+    "method": "bayes",
+    "metric": {"name": "mse", "goal": "minimize"},
+    "parameters": {
+        "lr": {"min": 1e-5, "max": 1e-3, "distribution": "log_uniform_values"},
+        "batch_size": {"values": [16, 32, 64]},
+        "epochs": {"values": [1, 2, 3, 4, 5]},
+    },
+}
+
+run_sweep = True
+if run_sweep:
+    sweep_id = wandb.sweep(sweep_config, project="reward_probing")
+    wandb.agent(sweep_id, function=train_probe_for_sweep, count=20)
