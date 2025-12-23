@@ -250,29 +250,65 @@ def eval_probe(model, probe: LinearProbe, dataset, n_samples):
 
 # =========================== dataset stuff =========================== #
 
-def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, balance_ratings=True):
+def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, hs_dataset=None, balance_ratings=True):
     """
-    Build a probe dataset from either binarized or unbinarized ultrafeedback.
+    Build a probe dataset from ultrafeedback (binarized or unbinarized) or HelpSteer2.
     
     Args:
         ufb_dataset: Binarized dataset (HuggingFaceH4/ultrafeedback_binarized)
         uf_dataset: Unbinarized dataset (openbmb/UltraFeedback)
+        hs_dataset: HelpSteer2 dataset (nvidia/HelpSteer2)
         balance_ratings: Whether to balance by rating scores
     
     Returns:
         Dataset with columns: prompt, response, score, is_winner
     
-    Exactly one of ufb_dataset or uf_dataset must be provided.
+    Exactly one of ufb_dataset, uf_dataset, or hs_dataset must be provided.
     """
-    if (ufb_dataset is None) == (uf_dataset is None):
-        raise ValueError("Exactly one of ufb_dataset or uf_dataset must be provided")
+    provided = sum(x is not None for x in [ufb_dataset, uf_dataset, hs_dataset])
+    if provided != 1:
+        raise ValueError("Exactly one of ufb_dataset, uf_dataset, or hs_dataset must be provided")
     
     prompts = []
     responses = []
     scores = []
     is_winner = []
     
-    if uf_dataset is not None:
+    if hs_dataset is not None:
+        # Process HelpSteer2 dataset
+        # Group by prompt first
+        from collections import defaultdict
+        prompt_groups = defaultdict(list)
+        for i, ex in enumerate(hs_dataset):
+            prompt_groups[ex["prompt"]].append(i)
+        
+        for prompt, indices in tqdm(prompt_groups.items(), desc="Building probe dataset (HelpSteer2)"):
+            # Collect responses with computed scores
+            completions = []
+            for idx in indices:
+                ex = hs_dataset[idx]
+                # Score = average of helpfulness, correctness, coherence (0-4 scale)
+                # Scale to 1-10: (avg / 4) * 9 + 1
+                avg_score = (ex["helpfulness"] + ex["correctness"] + ex["coherence"]) / 3
+                scaled_score = (avg_score / 4) * 9 + 1  # Maps 0-4 to 1-10
+                completions.append((scaled_score, ex["response"]))
+            
+            if len(completions) == 0:
+                continue
+            
+            # Shuffle for random tiebreaking, then sort by score descending
+            random.shuffle(completions)
+            completions.sort(key=lambda x: x[0], reverse=True)
+            
+            # Top half are winners (typically 1 of 2)
+            n_winners = max(1, len(completions) // 2)
+            for rank, (score, response) in enumerate(completions):
+                prompts.append(prompt)
+                responses.append(response)
+                scores.append(round(score))
+                is_winner.append(rank < n_winners)
+    
+    elif uf_dataset is not None:
         # Process unbinarized dataset
         for example in tqdm(uf_dataset, desc="Building probe dataset (unbinarized)"):
             prompt = example["instruction"]

@@ -33,6 +33,6 @@ Language models have been trained via some kind of rl on human preference data (
     - Accuracy on par with previous ones, but the correlation is clearly much stronger on the scatterplot
 
 ## todo
-- make a probe dataset from ultrafeedback instead of ultrafeedback-binarized
-- train probe on winners  vs losers instead of absolute score.
-- train probe on something trivial that it should do really well on to check if stupid issue
+- sweep across layers and sequence positions
+- try lr scheduler
+
