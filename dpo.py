@@ -6,7 +6,8 @@ DTYPE = t.bfloat16
 
 #%%
 
-MODEL_HF_NAME = "HuggingFaceH4/zephyr-7b-beta"
+# MODEL_HF_NAME = "HuggingFaceH4/zephyr-7b-beta"
+MODEL_HF_NAME = "Qwen/Qwen2.5-7B-Instruct"
 hf_model = AutoModelForCausalLM.from_pretrained(
     MODEL_HF_NAME,
     torch_dtype=DTYPE,
@@ -29,12 +30,10 @@ t.cuda.empty_cache()
 
 #%%
 
-beta = 0.1
-lr = 1e-6
-batch_size = 1
 
 # dataset = datasets.load_dataset("Anthropic/hh-rlhf", split="train")
-dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
+# dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
+dataset = datasets.load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
 
 #%%
 
@@ -59,7 +58,9 @@ def dpo_loss(
     logits = beta * (policy_logratios - ref_logratios)
     return -t.nn.functional.logsigmoid(logits).mean()
 
-#%%
+beta = 0.1
+lr = 1e-6
+batch_size = 1
 
 # Store reference logprobs (model starts as its own reference)
 model.requires_grad_(False)

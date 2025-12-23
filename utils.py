@@ -98,7 +98,7 @@ class LinearProbe:
         return self.probe @ act
     
     def get_pred(self, act: Tensor) -> Tensor:
-        probe_pred = round(self.forward(act).item() * 10)
+        probe_pred = self.forward(act).item() * 10
         return probe_pred
     
     def save(self):

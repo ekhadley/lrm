@@ -221,10 +221,24 @@ if eval_posttrained_model_probe_reward:
         response_toks = model.generate(
             user_prompt_toks,
             do_sample=True,
-            verbose=True,
+            verbose=False,
             max_new_tokens=500
         ).squeeze()
         print(model.tokenizer.decode(response_toks))
+
+        # Get probe's reward estimate for the generated completion
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                response_toks,
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            act = cache[probe.act_name].squeeze().to(train_dtype)
+            target_act = act[target_act_seq_pos]
+            
+            probe_pred = probe.get_pred(target_act)
+            
+            bar.set_description(f"{purple}Probe prediction: {probe_pred:.2f}{endc}")
 
         break
 
