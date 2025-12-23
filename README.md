@@ -1,5 +1,5 @@
 # Do language models model expected rewards?
-- total time: 9 hrs
+- total time: 10 hrs
 ### Summary
 Language models have been trained via some kind of rl on human preference data (or ai preference data). Language models thus are trained to steer their outputs to get high reward from the supervision process. (This used to be done with explicit reward models but now is done via direct optimization of the models, using their own knowledge as implicit reward models, but this isnt a load bearing fact.) Models most likely represent some form of their expected reward during generation. Can we try and elicit this information from the model? What effects the model's estimate of reward? How do the user's messages factor in?
 
@@ -24,8 +24,6 @@ Language models have been trained via some kind of rl on human preference data (
         - training a chat model using this
             - sft? dpo? How exactly does the training scheme effect what the model is expected to learn or is incentivized to do?
                 - I assume that whatever an AI completion rater is picking up on is also already represented linearly in the subject model and we are just promoting that direction or close to it during fting. so the probe can basically do the same thing?
-
-    - since all i really care about is the raw ratings, I realy should be using the unbinarized dataset, rather than the binarized winner/loser dataset
 
 - I trained a nonlinear probe, it was not better than the probe and a bit slower so yeah. Sticking with linear.
 
