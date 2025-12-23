@@ -1,5 +1,5 @@
 # Do language models model expected rewards?
-- total time: 11 hrs
+- total time: 12 hrs
 ### Summary
 Language models have been trained via some kind of rl on human preference data (or ai preference data). Language models thus are trained to steer their outputs to get high reward from the supervision process. (This used to be done with explicit reward models but now is done via direct optimization of the models, using their own knowledge as implicit reward models, but this isnt a load bearing fact.) Models most likely represent some form of their expected reward during generation. Can we try and elicit this information from the model? What effects the model's estimate of reward? How do the user's messages factor in?
 
@@ -28,8 +28,10 @@ Language models have been trained via some kind of rl on human preference data (
 - current best hparams: linear probe, 24.resid_pre, lr=1e-4, bs=8, seq_pos=-1, wd=1e-4
     - I trained a nonlinear probe, it was not better than the probe and a bit slower so yeah. Sticking with linear.
 
-- alternatively, we could probe a binary classifier on the activations of both the pre-rl and post-rl model on the same sequence, and make it try to guess which model's activation's its currently reading.
+- alternatively, we could train a probe on completions from the pre and post postraining model and have it calssify which model it thinks the completion came from.
     - `what would this tell us?`
+    - a probe trained on the ground truth completion ratings tells us if the model contains enough info to estimate the things the rater cares about
+        - this is potentially different from what the model *learns* to care about.
     - dpo is directly training, given winner/loser completion pairs, to maximize the difference between the model's likelihood to produce the losing completion and its likelihood to produce the winning one.
 
 - agenda:
