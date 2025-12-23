@@ -55,7 +55,7 @@ if IPYTHON is not None:
 
 # ============================= model stuff ============================= #
 
-class Probe:
+class LinearProbe:
     def __init__(self, model, layer, act_name, device="cuda", hash_name=None):
         self.model = model
         self.layer = layer
@@ -129,6 +129,82 @@ class Probe:
         
         return probe
 
+class NonLinearProbe:
+    def __init__(self, model, layer, act_name, device="cuda", hash_name=None):
+        self.model = model
+        self.layer = layer
+        self.act_name = act_name
+        self.l1 = t.nn.Linear(model.cfg.d_model, model.cfg.d_model, device=device)
+        self.l2 = t.nn.Linear(model.cfg.d_model, 1, device=device)
+        
+        # Generate unique hash name if not provided
+        if hash_name is None:
+            timestamp = str(time.time_ns())
+            hash_input = f"{layer}_{act_name}_{timestamp}"
+            self.hash_name = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
+        else:
+            self.hash_name = hash_name
+        
+        # Create probe directory
+        self.save_dir = PROBES_DIR / self.hash_name
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def dtype(self):
+        return self.l1.weight.dtype
+
+    def forward(self, act: Tensor) -> Tensor:
+        return self.l2(t.relu(self.l1(act))).squeeze()
+    
+    def get_pred(self, act: Tensor) -> Tensor:
+        probe_pred = round(self.forward(act).detach().item() * 10)
+        return probe_pred
+    
+    def save(self, step=None):
+        """Save probe state to disk."""
+        if step is not None:
+            save_path = self.save_dir / f"probe_step_{step}.pt"
+        else:
+            save_path = self.save_dir / "probe_latest.pt"
+        
+        state = {
+            "l1": self.l1.state_dict(),
+            "l2": self.l2.state_dict(),
+            "layer": self.layer,
+            "act_name": self.act_name,
+            "hash_name": self.hash_name,
+        }
+        if step is not None:
+            state["step"] = step
+        
+        t.save(state, save_path)
+        return save_path
+    
+    @classmethod
+    def load(cls, model, hash_name, step=None, device="cuda"):
+        """Load probe from disk."""
+        load_dir = PROBES_DIR / hash_name
+        
+        if step is not None:
+            load_path = load_dir / f"probe_step_{step}.pt"
+        else:
+            load_path = load_dir / "probe_latest.pt"
+        
+        if not load_path.exists():
+            raise FileNotFoundError(f"Probe checkpoint not found: {load_path}")
+        
+        state = t.load(load_path, map_location=device)
+        
+        probe = cls(
+            model=model,
+            layer=state["layer"],
+            act_name=state["act_name"],
+            hash_name=state["hash_name"],
+        )
+        probe.l1.load_state_dict(state["l1"])
+        probe.l2.load_state_dict(state["l2"])
+        
+        return probe
 
 
 # =========================== dataset stuff =========================== #

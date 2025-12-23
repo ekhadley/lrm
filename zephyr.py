@@ -73,7 +73,7 @@ if generate_probe_dataset:
 
 #%%
 
-from utils import Probe
+from utils import LinearProbe
 
 train_rating_probe = False
 if train_rating_probe:
@@ -86,7 +86,7 @@ if train_rating_probe:
     save_every_steps = 500  # Save checkpoint every N steps
 
     train_dtype = t.float32
-    probe = Probe(model, probe_layer, probe_act_name)
+    probe = LinearProbe(model, probe_layer, probe_act_name)
     print(f"{green}Probe hash: {probe.hash_name}{endc}")
     print(f"{green}Saving to: {probe.save_dir}{endc}")
 
@@ -152,7 +152,7 @@ if train_rating_probe:
 #%%
 
 
-def eval_probe(probe: Probe, dataset, n_samples):
+def eval_probe(probe: LinearProbe, dataset, n_samples):
     """Evaluate probe on dataset samples, returning true and predicted scores."""
     true_scores = []
     pred_scores = []
@@ -190,7 +190,7 @@ def eval_probe(probe: Probe, dataset, n_samples):
     t.cuda.empty_cache()
     return true_scores, pred_scores
 
-probe = Probe.load(model, "d81ea315a6b6")
+probe = LinearProbe.load(model, "d81ea315a6b6")
 scores, preds = eval_probe(probe, dataset, 256)
 
 #%%
@@ -206,9 +206,9 @@ px.scatter(
 
 #%% Wandb Sweep for Probe Training
 
-from utils import Probe
+from utils import LinearProbe
 
-def benchmark_probe(probe: Probe, dataset, n_samples=256):
+def benchmark_probe(probe: LinearProbe, dataset, n_samples=256):
     """Evaluate probe MSE on n_samples examples. Returns MSE of (true - pred) in 1-10 scale."""
     errors_sq = []
     
@@ -262,7 +262,7 @@ def train_probe_for_sweep():
     target_act_seq_pos = -5
     train_dtype = t.float32
     
-    probe = Probe(model, probe_layer, probe_act_name)
+    probe = LinearProbe(model, probe_layer, probe_act_name)
     opt = t.optim.AdamW([probe.probe], lr=lr, weight_decay=0.0, betas=(0.9, 0.99))
     
     step = 0

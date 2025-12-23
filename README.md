@@ -23,8 +23,26 @@ Language models have been trained via some kind of rl on human preference data (
 - I have trained 1 probe on the layer 30 intial residual stream on the very last token position of the prompt+model response sequence.
     - it acheives a final rating accuracy (the percentage of the time that its guess is the same as the rating score from the dataset) of 35%
     - The dataset is balanced, so chance accuracy is 10%. So it's definitely learned something.
-    - How good is this exactly?
-        - Should make a scatterplot to see the variance
+    - I made a scatterplot of true vs predicted scores. It shows the probe is pretty bad.
+
+- is this model/dataset choice bad?
+    - the labels are by gpt4, so pretty noisy
+    - the model/dataset are around 2 years old
+    - could we just... make a better model and dataset?
+        - would involve getting a chat dataset,
+        - rating each completion with some more modern model
+            - 4o? sonnet 4.5? Not sure what the returns to scale are for something like this.
+            - probably a gemini actually, they are pretty pareto optimal
+        - training a chat model using this
+            - sft? dpo? How exactly does the training scheme effect what the model is expected to learn or is incentivized to do?
+                - I assume that whatever an AI completion rater is picking up on is also already represented linearly in the subject model and we are just promoting that direction or close to it during fting. so the probe can basically do the same thing?
+
+    - since all i really care about is the raw ratings, I realy should be using the ubinarized dataset, rather than the binarized winner/loser dataset
+
+
 
 ## todo
-- make scatterplot of probe results to see correlation as well as accuracy
+- train a nonlinear probe. (2 layer mlp?)
+- make a probe dataset from ultrafeedback instead of ultrafeedback-binarized
+- train probe on winners  vs losers instead of absolute score.
+- train probe on something trivial that it should do really well on to check if stupid issue
