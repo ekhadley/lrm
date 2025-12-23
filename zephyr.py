@@ -58,21 +58,25 @@ if do_example_generation:
 
 #%%
 
-generate_probe_dataset = False
+generate_probe_dataset = True
 if generate_probe_dataset:
-    uf = dataset = datasets.load_dataset("openbmb/ultrafeedback", split="train")
+    # uf = dataset = datasets.load_dataset("openbmb/ultrafeedback", split="train")
+    hs = dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
     # ufb = dataset = datasets.load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
-    # dataset = datasets.load_dataset("eekay/ultrafeedback-binarized-balanced", split="train")
+    datasets.load_dataset("eekay/ultrafeedback-binarized-balanced", split="train")
     
     balanced_dataset = make_probe_dataset(
+        hs_dataset=hs,
         # ufb_dataset=ufb,
-        uf_dataset=uf,
+        # uf_dataset=uf,
         balance_ratings=True
     ).shuffle()
     print(balanced_dataset)
     print(balanced_dataset[0])
     print(balanced_dataset[1])
     print(balanced_dataset[2])
+    # balanced_dataset.push_to_hub("eekay/helpsteer2-balanced")
+    
 
 
 #%%
@@ -86,7 +90,7 @@ if train_rating_probe:
     lr = 1e-4
     batch_size = 8
     epochs = 1
-    weight_decay = 1e-4
+    weight_decay = 1e-3
     target_user_prompt = False
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
@@ -115,7 +119,7 @@ if train_rating_probe:
                 )
                 target_act_seq_pos = len(prompt_toks) - 1
             else:
-                target_act_seq_pos = -1
+                target_act_seq_pos = -3
 
             conversation_toks = model.tokenizer.apply_chat_template(
                 messages,
@@ -126,7 +130,7 @@ if train_rating_probe:
             if seq_len >= model.cfg.n_ctx: continue
             # print(model.tokenizer.decode(conversation_toks))
             # print(pink, repr(model.tokenizer.decode(conversation_toks[target_act_seq_pos])), endc)
-            
+
             score = ex["score"]
             normalized_score = (score / 10.0)
 
@@ -139,6 +143,7 @@ if train_rating_probe:
             target_act = act[target_act_seq_pos]
 
             probe_act = probe.forward(target_act)
+            # loss = t.abs(normalized_score - probe_act) / batch_size
             loss = t.abs(normalized_score - probe_act) / batch_size
             loss.backward()
             
@@ -172,7 +177,7 @@ if train_rating_probe:
 #%%
 
 from utils import eval_probe
-probe = LinearProbe.load(model, "3a2772b6799b")
+# probe = LinearProbe.load(model, "1340f0f97c78")
 # probe = NonLinearProbe.load(model, "0c8d9e05dd39")
 scores, preds = eval_probe(model, probe, dataset, 256)
 corr = pearson(scores, preds)
@@ -181,5 +186,7 @@ px.scatter(
     y=preds,
     labels={"x":"True Score", "y":"Probe Prediction"},
     title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
-    range_y=[0,12], range_x=[0,12], height=1000, width=1000, template="plotly_dark"
+    range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
 )
+
+#%%

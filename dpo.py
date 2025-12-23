@@ -8,25 +8,26 @@ from trl import DPOConfig, DPOTrainer
 DEVICE = "cuda"
 DTYPE = t.bfloat16
 
-
 #%%
 
-MODEL_NAME = "meta-llama/Meta-Llama-3-8B"
+# MODEL_NAME = "meta-llama/Meta-Llama-3-8B"
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+# MODEL_NAME = "mistralai/Mistral-7B-v0.1"
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
-    torch_dtype=DTYPE,
-    device_map=DEVICE,
+    dtype=DTYPE,
+    # device_map=DEVICE,
+    device_map="auto",
 )
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 
 #%%
 
-dataset = datasets.load_dataset(
-    # "HuggingFaceH4/ultrafeedback_binarized",
-    "HuggingFaceH4/ultrafeedback_binarized",
-    split="train_prefs"
-)
+from utils import convert_hs_to_dpo_format
+
+rating_dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
+dpo_dataset = convert_hs_to_dpo_format(rating_dataset)
 
 #%%
 
@@ -43,19 +44,15 @@ training_args = DPOConfig(
     bf16=True,
 )
 
-#%%
-
 trainer = DPOTrainer(
     model=model,
     args=training_args,
-    train_dataset=dataset,
+    train_dataset=dpo_dataset,
     processing_class=tokenizer,
 )
 
 #%%
 
-run_training = False
-if run_training:
-    trainer.train()
-    trainer.save_model("./dpo_final")
+trainer.train()
+trainer.save_model("./dpo_final")
 
