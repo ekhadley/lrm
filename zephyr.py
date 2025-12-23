@@ -207,10 +207,11 @@ if generate_new_completions:
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
     n_new_completions = 512
+    max_seq_len = model.cfg.n_ctx - 1
     
     completions = []
     n_generated = 0
-    for ex in (bar:=tqdm(dataset, desc=f"{lime}generating completions with {MODEL_NAME}{endc}")):
+    for ex in (bar:=tqdm(dataset, total=n_new_completions)):
         if n_generated >= n_new_completions: break
         completions.append(ex)
         user_prompt_toks = model.tokenizer.apply_chat_template(
@@ -218,22 +219,24 @@ if generate_new_completions:
             return_tensors="pt",
             add_generation_prompt=True,
         ).to(DEVICE)
-
-        print(orange, user_prompt_toks.shape, endc)
-        print(orange, model.tokenizer.decode(user_prompt_toks.squeeze()), endc)
+        user_prompt_len = user_prompt_toks.shape[-1]
 
         response_toks = model.generate(
             user_prompt_toks,
             do_sample=True,
             verbose=False,
-            max_new_tokens=1024
+            max_new_tokens=max_seq_len - user_prompt_len
         ).squeeze()
-        
-        print(cyan, response_toks.shape, endc)
+        prompt_completion_len = response_toks.shape[-1]
+        completion_len = prompt_completion_len - user_prompt_len
+
         response_text = model.tokenizer.decode(response_toks)
-        print(cyan, response_text, endc)
+        
         completions[-1]["new_completion"] = response_text
         completions[-1]["completion_ids"] = response_toks.tolist()
+        n_generated += 1
+
+        bar.set_description(f"{lime}generated {user_prompt_len}+{completion_len} toks{endc}")
 
     with open(f"./data/{MODEL_NAME}_completions.json", "w") as f:
         json.dump({"model":MODEL_NAME, "completions":completions}, f, indent=2)
