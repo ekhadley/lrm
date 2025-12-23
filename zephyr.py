@@ -63,7 +63,6 @@ if generate_probe_dataset:
     # uf = dataset = datasets.load_dataset("openbmb/ultrafeedback", split="train")
     hs = dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
     # ufb = dataset = datasets.load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
-    datasets.load_dataset("eekay/ultrafeedback-binarized-balanced", split="train")
     
     balanced_dataset = make_probe_dataset(
         hs_dataset=hs,
@@ -77,8 +76,6 @@ if generate_probe_dataset:
     print(balanced_dataset[2])
     # balanced_dataset.push_to_hub("eekay/helpsteer2-balanced")
     
-
-
 #%%
 
 from utils import LinearProbe, NonLinearProbe
@@ -90,7 +87,7 @@ if train_rating_probe:
     lr = 1e-4
     batch_size = 8
     epochs = 1
-    weight_decay = 1e-3
+    weight_decay = 1e-4
     target_user_prompt = False
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
@@ -103,7 +100,17 @@ if train_rating_probe:
 
     opt = t.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99))
 
-    run_cfg = {"lr":lr, "batch_size":batch_size, "act_name":probe_act_name, "dtype":str(train_dtype), "hash_name":probe.hash_name, "dataset_id":dataset_id, "target_user_prompt":target_user_prompt}
+    run_cfg = {
+        "lr":lr,
+        "batch_size":batch_size,
+        "act_name":probe_act_name,
+        "dtype":str(train_dtype),
+        "hash_name":probe.hash_name,
+        "dataset_id":dataset_id,
+        "target_user_prompt":target_user_prompt,
+        "weight_decay":weight_decay,
+        "note": "seq pos halfway through assistant response"
+    }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
     grad_norm = 0.0
@@ -111,25 +118,26 @@ if train_rating_probe:
     for e in range(epochs):
         for ex in (bar:=tqdm(dataset)):
             messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
-
-            if target_user_prompt: # if we are training the probe on just the 
-                prompt_toks = model.tokenizer.apply_chat_template(
-                    [{"role":"user","content": ex["prompt"]}],
-                    add_generation_prompt=True,
-                )
-                target_act_seq_pos = len(prompt_toks) - 1
-            else:
-                target_act_seq_pos = -3
-
             conversation_toks = model.tokenizer.apply_chat_template(
                 messages,
                 return_tensors="pt",
             ).squeeze().to(DEVICE)
             seq_len = conversation_toks.shape[0]
-
             if seq_len >= model.cfg.n_ctx: continue
-            # print(model.tokenizer.decode(conversation_toks))
-            # print(pink, repr(model.tokenizer.decode(conversation_toks[target_act_seq_pos])), endc)
+
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role":"user","content": ex["prompt"]}],
+                add_generation_prompt=True,
+            )
+            user_prompt_len = len(user_prompt_toks)
+            assistant_response_len = seq_len - user_prompt_len
+            
+            if target_user_prompt: # if we are training the probe on just the 
+                target_act_seq_pos = len(user_prompt_toks) - 1
+            else:
+                target_act_seq_pos = -1
+            
+            target_act_seq_pos = (user_prompt_len + seq_len) // 2
 
             score = ex["score"]
             normalized_score = (score / 10.0)
@@ -158,7 +166,7 @@ if train_rating_probe:
                 probe_pred = round(probe_act.detach().item() * 10)
                 pred_acc = 1 if probe_pred == score else 0
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
-                bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe_norm: {probe_norm:.3f} probe grad norm: {grad_norm:.3f}, probe_pred: {pred_acc} {endc}")
+                bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc}, grad norm: {grad_norm:.3f} {endc}")
 
             if (step + 1) % save_every_steps == 0:
                 probe.save()
