@@ -209,45 +209,83 @@ class NonLinearProbe:
 
 # =========================== dataset stuff =========================== #
 
-def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=False):
-    if ufb_dataset is None:
-        ufb_dataset = datasets.load_dataset(
-            "HuggingFaceH4/ultrafeedback_binarized", 
-            split=split
-        )
+def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, balance_ratings=True):
+    """
+    Build a probe dataset from either binarized or unbinarized ultrafeedback.
+    
+    Args:
+        ufb_dataset: Binarized dataset (HuggingFaceH4/ultrafeedback_binarized)
+        uf_dataset: Unbinarized dataset (openbmb/UltraFeedback)
+        balance_ratings: Whether to balance by rating scores
+    
+    Returns:
+        Dataset with columns: prompt, response, score, is_winner
+    
+    Exactly one of ufb_dataset or uf_dataset must be provided.
+    """
+    if (ufb_dataset is None) == (uf_dataset is None):
+        raise ValueError("Exactly one of ufb_dataset or uf_dataset must be provided")
     
     prompts = []
     responses = []
     scores = []
     is_winner = []
     
-    for example in tqdm(ufb_dataset, desc="Building probe dataset"):
-        # Extract prompt from the first message (user message)
-        # The chosen/rejected fields are lists of message dicts
-        chosen_messages = example["chosen"]
-        rejected_messages = example["rejected"]
-        
-        # Get prompt from user message (first message in the conversation)
-        prompt = chosen_messages[0]["content"]
-        
-        # Get chosen response and score
-        chosen_response = chosen_messages[1]["content"]
-        chosen_score = example["score_chosen"]
-        
-        prompts.append(prompt)
-        responses.append(chosen_response)
-        scores.append(round(chosen_score))
-        is_winner.append(True)
-        
-        # Get rejected response and score (skip if duplicate of chosen)
-        rejected_response = rejected_messages[1]["content"]
-        rejected_score = example["score_rejected"]
-        
-        if rejected_response != chosen_response:
+    if uf_dataset is not None:
+        # Process unbinarized dataset
+        for example in tqdm(uf_dataset, desc="Building probe dataset (unbinarized)"):
+            prompt = example["instruction"]
+            completions = example["completions"]
+            
+            # Filter completions with valid scores and collect (index, score, completion)
+            valid_completions = []
+            for i, comp in enumerate(completions):
+                score = comp.get("overall_score")
+                if score is not None:
+                    valid_completions.append((i, score, comp))
+            
+            if len(valid_completions) == 0:
+                continue
+            
+            # Shuffle first for random tiebreaking, then sort by score descending
+            random.shuffle(valid_completions)
+            valid_completions.sort(key=lambda x: x[1], reverse=True)
+            
+            # Top 2 are winners
+            for rank, (idx, score, comp) in enumerate(valid_completions):
+                prompts.append(prompt)
+                responses.append(comp["response"])
+                scores.append(round(score))
+                is_winner.append(rank < 2)  # 0 and 1 are winners
+    else:
+        # Process binarized dataset
+        for example in tqdm(ufb_dataset, desc="Building probe dataset (binarized)"):
+            # Extract prompt from the first message (user message)
+            # The chosen/rejected fields are lists of message dicts
+            chosen_messages = example["chosen"]
+            rejected_messages = example["rejected"]
+            
+            # Get prompt from user message (first message in the conversation)
+            prompt = chosen_messages[0]["content"]
+            
+            # Get chosen response and score
+            chosen_response = chosen_messages[1]["content"]
+            chosen_score = example["score_chosen"]
+            
             prompts.append(prompt)
-            responses.append(rejected_response)
-            scores.append(round(rejected_score))
-            is_winner.append(False)
+            responses.append(chosen_response)
+            scores.append(round(chosen_score))
+            is_winner.append(True)
+            
+            # Get rejected response and score (skip if duplicate of chosen)
+            rejected_response = rejected_messages[1]["content"]
+            rejected_score = example["score_rejected"]
+            
+            if rejected_response != chosen_response:
+                prompts.append(prompt)
+                responses.append(rejected_response)
+                scores.append(round(rejected_score))
+                is_winner.append(False)
     
     probe_dataset = Dataset.from_dict({
         "prompt": prompts,
