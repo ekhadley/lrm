@@ -78,6 +78,17 @@ class LinearProbe:
     def dtype(self):
         return self.probe.dtype
 
+    def parameters(self):
+        return iter([self.probe])
+
+    def grad_norm(self):
+        if self.probe.grad is None:
+            return 0.0
+        return self.probe.grad.norm().item()
+
+    def weight_norm(self):
+        return self.probe.norm().item()
+
     def forward(self, act: Tensor) -> Tensor:
         return self.probe @ act
     
@@ -152,6 +163,23 @@ class NonLinearProbe:
     @property
     def dtype(self):
         return self.l1.weight.dtype
+
+    def parameters(self):
+        yield from self.l1.parameters()
+        yield from self.l2.parameters()
+
+    def grad_norm(self):
+        total_norm = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                total_norm += p.grad.norm().item() ** 2
+        return total_norm ** 0.5
+
+    def weight_norm(self):
+        total_norm = 0.0
+        for p in self.parameters():
+            total_norm += p.norm().item() ** 2
+        return total_norm ** 0.5
 
     def forward(self, act: Tensor) -> Tensor:
         return self.l2(t.relu(self.l1(act))).squeeze()
