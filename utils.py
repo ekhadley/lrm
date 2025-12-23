@@ -56,11 +56,11 @@ if IPYTHON is not None:
 # ============================= model stuff ============================= #
 
 class Probe:
-    def __init__(self, model, layer, act_name, hash_name=None):
+    def __init__(self, model, layer, act_name, device="cuda", hash_name=None):
         self.model = model
         self.layer = layer
         self.act_name = act_name
-        self.probe = t.zeros((model.cfg.d_model), dtype=t.float32, device=DEVICE, requires_grad=True)
+        self.probe = t.zeros((model.cfg.d_model), dtype=t.float32, device=device, requires_grad=True)
         
         # Generate unique hash name if not provided
         if hash_name is None:
@@ -105,7 +105,7 @@ class Probe:
         return save_path
     
     @classmethod
-    def load(cls, model, hash_name, step=None, device=DEVICE):
+    def load(cls, model, hash_name, step=None, device="cuda"):
         """Load probe from disk."""
         load_dir = PROBES_DIR / hash_name
         

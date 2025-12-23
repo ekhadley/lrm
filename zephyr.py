@@ -75,7 +75,7 @@ if generate_probe_dataset:
 
 from utils import Probe
 
-train_rating_probe = True
+train_rating_probe = False
 if train_rating_probe:
     probe_layer = 30
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
@@ -205,6 +205,8 @@ px.scatter(
 )
 
 #%% Wandb Sweep for Probe Training
+
+from utils import Probe
 
 def benchmark_probe(probe: Probe, dataset, n_samples=256):
     """Evaluate probe MSE on n_samples examples. Returns MSE of (true - pred) in 1-10 scale."""
