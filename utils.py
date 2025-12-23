@@ -219,6 +219,7 @@ def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=Fa
     prompts = []
     responses = []
     scores = []
+    is_winner = []
     
     for example in tqdm(ufb_dataset, desc="Building probe dataset"):
         # Extract prompt from the first message (user message)
@@ -236,6 +237,7 @@ def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=Fa
         prompts.append(prompt)
         responses.append(chosen_response)
         scores.append(round(chosen_score))
+        is_winner.append(True)
         
         # Get rejected response and score (skip if duplicate of chosen)
         rejected_response = rejected_messages[1]["content"]
@@ -245,11 +247,13 @@ def make_probe_dataset(ufb_dataset=None, split="train_prefs", balance_ratings=Fa
             prompts.append(prompt)
             responses.append(rejected_response)
             scores.append(round(rejected_score))
+            is_winner.append(False)
     
     probe_dataset = Dataset.from_dict({
         "prompt": prompts,
         "response": responses,
         "score": scores,
+        "is_winner": is_winner,
     })
     
     if balance_ratings:
