@@ -210,6 +210,43 @@ class NonLinearProbe:
         
         return probe
 
+def eval_probe(model, probe: LinearProbe, dataset, n_samples):
+    """Evaluate probe on dataset samples, returning true and predicted scores."""
+    true_scores = []
+    pred_scores = []
+    
+    for i, ex in enumerate(tqdm(dataset, total=n_samples)):
+        if i >= n_samples:
+            break
+            
+        messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
+        prompt_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(model.cfg.device)
+        seq_len = prompt_toks.shape[0]
+        if seq_len >= model.cfg.n_ctx:
+            continue
+
+        score = ex["score"]
+        
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer=probe.layer+1,
+                names_filter=[probe.act_name]
+            )
+            act = cache[probe.act_name].squeeze().to(probe.dtype)
+            target_act = act[-1]
+            
+            # probe_pred = probe.get_pred(target_act)
+            probe_act = probe.forward(target_act).item()
+        
+        true_scores.append(score)
+        pred_scores.append(probe_act*10)
+
+    t.cuda.empty_cache()
+    return true_scores, pred_scores
 
 # =========================== dataset stuff =========================== #
 

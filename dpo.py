@@ -11,7 +11,6 @@ DTYPE = t.bfloat16
 
 #%%
 
-# MODEL_NAME = "HuggingFaceH4/zephyr-7b-beta"
 MODEL_NAME = "meta-llama/Meta-Llama-3-8B"
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,

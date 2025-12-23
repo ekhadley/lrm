@@ -115,7 +115,7 @@ if train_rating_probe:
                 )
                 target_act_seq_pos = len(prompt_toks) - 1
             else:
-                target_act_seq_pos = -5
+                target_act_seq_pos = -1
 
             conversation_toks = model.tokenizer.apply_chat_template(
                 messages,
@@ -171,47 +171,10 @@ if train_rating_probe:
 
 #%%
 
-def eval_probe(probe: LinearProbe, dataset, n_samples):
-    """Evaluate probe on dataset samples, returning true and predicted scores."""
-    true_scores = []
-    pred_scores = []
-    
-    for i, ex in enumerate(tqdm(dataset, total=n_samples)):
-        if i >= n_samples:
-            break
-            
-        messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
-        prompt_toks = model.tokenizer.apply_chat_template(
-            messages,
-            return_tensors="pt",
-        ).squeeze().to(DEVICE)
-        seq_len = prompt_toks.shape[0]
-        if seq_len >= model.cfg.n_ctx:
-            continue
-
-        score = ex["score"]
-        
-        with t.inference_mode():
-            _, cache = model.run_with_cache(
-                prompt_toks,
-                stop_at_layer=probe.layer+1,
-                names_filter=[probe.act_name]
-            )
-            act = cache[probe.act_name].squeeze().to(probe.dtype)
-            target_act = act[-1]
-            
-            # probe_pred = probe.get_pred(target_act)
-            probe_act = probe.forward(target_act).item()
-        
-        true_scores.append(score)
-        pred_scores.append(probe_act*10)
-
-    t.cuda.empty_cache()
-    return true_scores, pred_scores
-
-probe = LinearProbe.load(model, "388b374aa79c")
+from utils import eval_probe
+probe = LinearProbe.load(model, "3a2772b6799b")
 # probe = NonLinearProbe.load(model, "0c8d9e05dd39")
-scores, preds = eval_probe(probe, dataset, 256)
+scores, preds = eval_probe(model, probe, dataset, 256)
 corr = pearson(scores, preds)
 px.scatter(
     x=scores,
