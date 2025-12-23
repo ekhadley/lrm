@@ -78,10 +78,6 @@ class LinearProbe:
             self.hash_name = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
         else:
             self.hash_name = hash_name
-        
-        # Create probe directory
-        self.save_dir = PROBES_DIR / self.hash_name
-        self.save_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def dtype(self):
@@ -105,35 +101,22 @@ class LinearProbe:
         probe_pred = round(self.forward(act).item() * 10)
         return probe_pred
     
-    def save(self, step=None):
+    def save(self):
         """Save probe state to disk."""
-        if step is not None:
-            save_path = self.save_dir / f"probe_step_{step}.pt"
-        else:
-            save_path = self.save_dir / "probe_latest.pt"
-        
+        save_path = PROBES_DIR / f"{self.hash_name}.pt"
         state = {
             "probe": self.probe.detach().cpu(),
             "layer": self.layer,
             "act_name": self.act_name,
             "hash_name": self.hash_name,
         }
-        if step is not None:
-            state["step"] = step
-        
         t.save(state, save_path)
         return save_path
     
     @classmethod
-    def load(cls, model, hash_name, step=None, device="cuda"):
+    def load(cls, model, hash_name, device="cuda"):
         """Load probe from disk."""
-        load_dir = PROBES_DIR / hash_name
-        
-        if step is not None:
-            load_path = load_dir / f"probe_step_{step}.pt"
-        else:
-            load_path = load_dir / "probe_latest.pt"
-        
+        load_path = PROBES_DIR / f"{hash_name}.pt"
         if not load_path.exists():
             raise FileNotFoundError(f"Probe checkpoint not found: {load_path}")
         
@@ -164,10 +147,6 @@ class NonLinearProbe:
             self.hash_name = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
         else:
             self.hash_name = hash_name
-        
-        # Create probe directory
-        self.save_dir = PROBES_DIR / self.hash_name
-        self.save_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def dtype(self):
@@ -197,13 +176,9 @@ class NonLinearProbe:
         probe_pred = round(self.forward(act).detach().item() * 10)
         return probe_pred
     
-    def save(self, step=None):
+    def save(self):
         """Save probe state to disk."""
-        if step is not None:
-            save_path = self.save_dir / f"probe_step_{step}.pt"
-        else:
-            save_path = self.save_dir / "probe_latest.pt"
-        
+        save_path = PROBES_DIR / f"{self.hash_name}.pt"
         state = {
             "l1": self.l1.state_dict(),
             "l2": self.l2.state_dict(),
@@ -211,21 +186,13 @@ class NonLinearProbe:
             "act_name": self.act_name,
             "hash_name": self.hash_name,
         }
-        if step is not None:
-            state["step"] = step
-        
         t.save(state, save_path)
         return save_path
     
     @classmethod
-    def load(cls, model, hash_name, step=None, device="cuda"):
+    def load(cls, model, hash_name, device="cuda"):
         """Load probe from disk."""
-        load_dir = PROBES_DIR / hash_name
-        
-        if step is not None:
-            load_path = load_dir / f"probe_step_{step}.pt"
-        else:
-            load_path = load_dir / "probe_latest.pt"
+        load_path = PROBES_DIR / f"{hash_name}.pt"
         
         if not load_path.exists():
             raise FileNotFoundError(f"Probe checkpoint not found: {load_path}")
