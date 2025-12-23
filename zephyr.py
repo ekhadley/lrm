@@ -58,7 +58,7 @@ if do_example_generation:
 
 #%%
 
-generate_probe_dataset = True
+generate_probe_dataset = False
 if generate_probe_dataset:
     # uf = dataset = datasets.load_dataset("openbmb/ultrafeedback", split="train")
     hs = dataset = datasets.load_dataset("nvidia/HelpSteer2", split="train")
@@ -93,7 +93,7 @@ if train_rating_probe:
     save_every_steps = 500  # Save checkpoint every N steps
 
     dataset = datasets.load_dataset(dataset_id, split="train")
-    train_dtype = t.float32
+    train_dtype = t.float33
     probe = LinearProbe(model, probe_layer, probe_act_name)
     # probe = NonLinearProbe(model, probe_layer, probe_act_name)
     print(f"{green}Probe name: {probe.hash_name}{endc}")
@@ -109,11 +109,11 @@ if train_rating_probe:
         "dataset_id":dataset_id,
         "target_user_prompt":target_user_prompt,
         "weight_decay":weight_decay,
-        "note": "seq pos halfway through assistant response"
+        "note": "probe trained on a random sequence position within the assistant's response"
     }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
-    grad_norm = 0.0
+    grad_norm = 0
     step = 0
     for e in range(epochs):
         for ex in (bar:=tqdm(dataset)):
@@ -137,7 +137,8 @@ if train_rating_probe:
             else:
                 target_act_seq_pos = -1
             
-            target_act_seq_pos = (user_prompt_len + seq_len) // 2
+            # target_act_seq_pos = (user_prompt_len + seq_len) // 2
+            target_act_seq_pos = random.randint(user_prompt_len + 1, seq_len - 1)
 
             score = ex["score"]
             normalized_score = (score / 10.0)
@@ -185,7 +186,7 @@ if train_rating_probe:
 #%%
 
 from utils import eval_probe
-# probe = LinearProbe.load(model, "1340f0f97c78")
+probe = LinearProbe.load(model, "efad62c7a0bc")
 # probe = NonLinearProbe.load(model, "0c8d9e05dd39")
 scores, preds = eval_probe(model, probe, dataset, 256)
 corr = pearson(scores, preds)
@@ -198,3 +199,33 @@ px.scatter(
 )
 
 #%%
+
+eval_posttrained_model_probe_reward = True
+if eval_posttrained_model_probe_reward:
+    dataset_id = "eekay/ultrafeedback-balanced"
+    probe = LinearProbe.load(model, "1340f0f97c78")
+    target_act_seq_pos = -3
+
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    train_dtype = t.float32
+
+    
+    for ex in (bar:=tqdm(dataset)):
+        user_prompt_toks = model.tokenizer.apply_chat_template(
+            [{"role":"user","content": ex["prompt"]}],
+            return_tensors="pt",
+            add_generation_prompt=True,
+        ).to(DEVICE)
+        user_prompt_len = user_prompt_toks.shape[-1]
+
+        response_toks = model.generate(
+            user_prompt_toks,
+            do_sample=True,
+            verbose=True,
+            max_new_tokens=500
+        ).squeeze()
+        print(model.tokenizer.decode(response_toks))
+
+        break
+
+    t.cuda.empty_cache()
