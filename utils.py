@@ -250,6 +250,60 @@ def eval_probe(model, probe: LinearProbe, dataset, n_samples):
 
 # =========================== dataset stuff =========================== #
 
+def convert_hs_to_dpo_format(hs_dataset):
+    """
+    Convert HelpSteer2 dataset to HuggingFace conversational preference format.
+    
+    Args:
+        hs_dataset: HelpSteer2 dataset (nvidia/HelpSteer2)
+    
+    Returns:
+        Dataset with columns: prompt, chosen, rejected
+        - prompt: [{"role": "user", "content": ...}]
+        - chosen: [{"role": "assistant", "content": ...}]
+        - rejected: [{"role": "assistant", "content": ...}]
+    """
+    from collections import defaultdict
+    
+    # Group by prompt
+    prompt_groups = defaultdict(list)
+    for i, ex in enumerate(hs_dataset):
+        prompt_groups[ex["prompt"]].append(i)
+    
+    prompts = []
+    chosen = []
+    rejected = []
+    
+    for prompt_text, indices in tqdm(prompt_groups.items(), desc="Converting to DPO format"):
+        if len(indices) < 2:
+            continue  # Need at least 2 responses for preference pair
+        
+        # Compute scores and collect responses
+        scored_responses = []
+        for idx in indices:
+            ex = hs_dataset[idx]
+            avg_score = (ex["helpfulness"] + ex["correctness"] + ex["coherence"]) / 3
+            scored_responses.append((avg_score, ex["response"]))
+        
+        # Shuffle for random tiebreaking, then sort by score descending
+        random.shuffle(scored_responses)
+        scored_responses.sort(key=lambda x: x[0], reverse=True)
+        
+        # Best response is chosen, worst is rejected
+        best_response = scored_responses[0][1]
+        worst_response = scored_responses[-1][1]
+        
+        prompts.append([{"role": "user", "content": prompt_text}])
+        chosen.append([{"role": "assistant", "content": best_response}])
+        rejected.append([{"role": "assistant", "content": worst_response}])
+    
+    return Dataset.from_dict({
+        "prompt": prompts,
+        "chosen": chosen,
+        "rejected": rejected,
+    })
+
+
 def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, hs_dataset=None, balance_ratings=True):
     """
     Build a probe dataset from ultrafeedback (binarized or unbinarized) or HelpSteer2.
