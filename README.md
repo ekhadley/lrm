@@ -12,20 +12,8 @@ Language models have been trained via some kind of rl on human preference data (
         - would we expect this in a model that was not trained in an online fashion?
 
 ## notes
-- Loaded starling 7b model which has publically released dataset and reward model
-    - model sucks, using different model. Attempting to focus on DPO methods that require no explicit reward model
-    - not sure this is possible:
-        - dpo is used for contrastive sort of training. The reward you get is implicit, and only meainingful betweens pairs of completions for the same prompt
-    - it is actually possible: the winners and losers were not chosen contrastively, but via [1-10] ratings from gpt4. The ratings are also provided, so those can be our source of 'absolute' rewards
 
-- switching to 
-
-- I have trained 1 probe on the layer 30 intial residual stream on the very last token position of the prompt+model response sequence.
-    - it acheives a final rating accuracy (the percentage of the time that its guess is the same as the rating score from the dataset) of 35%
-    - The dataset is balanced, so chance accuracy is 10%. So it's definitely learned something.
-    - I made a scatterplot of true vs predicted scores. It shows the probe is pretty bad.
-
-- is this model/dataset choice bad?
+- is this model/dataset choice bad? (zephyr, a post train of mistral 1 7b from a gpt4-rated RLAIF completion dataset)
     - the labels are by gpt4, so pretty noisy
     - the model/dataset are around 2 years old
     - could we just... make a better model and dataset?
@@ -39,7 +27,8 @@ Language models have been trained via some kind of rl on human preference data (
 
     - since all i really care about is the raw ratings, I realy should be using the unbinarized dataset, rather than the binarized winner/loser dataset
 
-
+- training on layer 24 and with smaller batch size seems to work better.
+    - Accuracy on par with previous ones, but the correlation is clearly much stronger on the scatterplot
 
 ## todo
 - train a nonlinear probe. (2 layer mlp?)

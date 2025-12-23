@@ -46,6 +46,15 @@ endc = '\033[0m'
 
 def tec(): t.cuda.empty_cache()
 
+def pearson(x, y):
+    n = len(x)
+    mean_x = sum(x) / n
+    mean_y = sum(y) / n
+    cov = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+    std_x = (sum((xi - mean_x) ** 2 for xi in x)) ** 0.5
+    std_y = (sum((yi - mean_y) ** 2 for yi in y)) ** 0.5
+    return cov / (std_x * std_y)
+
 PROBES_DIR = Path("./probes")
 
 IPYTHON = get_ipython()
