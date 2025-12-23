@@ -8,16 +8,18 @@ DTYPE = t.bfloat16
 
 #%%
 
-MODEL_HF_NAME = "HuggingFaceH4/zephyr-7b-beta"
+MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
+MODEL_NAME = MODEL_ID.split("/")[-1]
+PARENT_MODEL_ID = "mistral-7b"
 hf_model = AutoModelForCausalLM.from_pretrained(
-    MODEL_HF_NAME,
+    MODEL_ID,
     torch_dtype=DTYPE,
     device_map=DEVICE
 )
-hf_tokenizer = AutoTokenizer.from_pretrained(MODEL_HF_NAME)
+hf_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
 model = HookedTransformer.from_pretrained(
-    "mistral-7b",
+    PARENT_MODEL_ID,
     hf_model=hf_model,
     device=DEVICE,
     dtype=DTYPE,
@@ -198,6 +200,42 @@ px.scatter(
     range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
 )
 
+#%% generate completions from the post-trained model
+
+generate_new_completions = True
+if generate_new_completions:
+    dataset_id = "eekay/ultrafeedback-balanced"
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    
+    completions = []
+    for ex in (bar:=tqdm(dataset, desc=f"{lime}generating completions with {MODEL_NAME}{endc}")):
+        completions.append(ex)
+        user_prompt_toks = model.tokenizer.apply_chat_template(
+            [{"role":"user","content": ex["prompt"]}],
+            return_tensors="pt",
+            add_generation_prompt=True,
+        ).to(DEVICE)
+
+        response_toks = model.generate(
+            user_prompt_toks,
+            do_sample=True,
+            verbose=False,
+            max_new_tokens=5000
+        ).squeeze()
+        
+        response_text = model.tokenizer.decode(response_toks)
+        completions[-1]["new_response"] = response_text
+        completions[-1]["response_ids"] = response_toks.tolist()
+        
+        t.cuda.empty_cache()
+
+        break
+
+    with open(f"./data/{MODEL_NAME}_completions.json", "w") as f:
+        json.dump({"model":MODEL_NAME, "completions":completions}, f, indent=2)
+    
+    t.cuda.empty_cache()
+
 #%%
 
 eval_posttrained_model_probe_reward = True
@@ -209,7 +247,6 @@ if eval_posttrained_model_probe_reward:
     dataset = datasets.load_dataset(dataset_id, split="train")
     train_dtype = t.float32
 
-    
     for ex in (bar:=tqdm(dataset)):
         user_prompt_toks = model.tokenizer.apply_chat_template(
             [{"role":"user","content": ex["prompt"]}],
