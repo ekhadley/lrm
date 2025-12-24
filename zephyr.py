@@ -6,30 +6,46 @@ DEVICE = "cuda"
 DTYPE = t.bfloat16 
 # DTYPE = t.float32 
 
-#%%
+#%% loading zephyr into mistral 7b the base model
 
-MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
-MODEL_NAME = MODEL_ID.split("/")[-1]
-PARENT_MODEL_ID = "mistral-7b"
-hf_model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID,
-    torch_dtype=DTYPE,
-    device_map=DEVICE
-)
-hf_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+USE_ZEPHYR = True
+tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
+if USE_ZEPHYR:
+    MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
+    MODEL_NAME = MODEL_ID.split("/")[-1]
+    PARENT_MODEL_ID = "mistral-7b"
+    hf_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        torch_dtype=DTYPE,
+        device_map=DEVICE
+    )
 
-model = HookedTransformer.from_pretrained(
-    PARENT_MODEL_ID,
-    hf_model=hf_model,
-    device=DEVICE,
-    dtype=DTYPE,
-    fold_ln=False,
-    center_writing_weights=False,
-    center_unembed=False,
-    tokenizer=hf_tokenizer
-)
+    model = HookedTransformer.from_pretrained(
+        PARENT_MODEL_ID,
+        hf_model=hf_model,
+        device=DEVICE,
+        dtype=DTYPE,
+        fold_ln=False,
+        center_writing_weights=False,
+        center_unembed=False,
+        tokenizer=tokenizer
+    )
+    del hf_model
+
+else:
+    MODEL_ID = "mistral-7b"
+    MODEL_NAME = MODEL_ID
+    model = HookedTransformer.from_pretrained(
+        MODEL_ID,
+        device=DEVICE,
+        dtype=DTYPE,
+        fold_ln=False,
+        center_writing_weights=False,
+        center_unembed=False,
+        tokenizer=tokenizer
+    )
+
 model.requires_grad_(False)
-del hf_model
 t.cuda.empty_cache()
 
 #%% example response generation
@@ -82,7 +98,7 @@ if generate_probe_dataset:
 
 from utils import LinearProbe, NonLinearProbe
 
-train_rating_probe = True
+train_rating_probe = False
 if train_rating_probe:
     probe_layer = 24
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
@@ -188,17 +204,20 @@ if train_rating_probe:
 #%%
 
 from utils import eval_probe
-probe = LinearProbe.load(model, "efad62c7a0bc")
-# probe = NonLinearProbe.load(model, "0c8d9e05dd39")
-scores, preds = eval_probe(model, probe, dataset, 256)
-corr = pearson(scores, preds)
-px.scatter(
-    x=scores,
-    y=preds,
-    labels={"x":"True Score", "y":"Probe Prediction"},
-    title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
-    range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
-)
+
+eval_trained_probe = False
+if eval_trained_probe:
+    probe = LinearProbe.load(model, "efad62c7a0bc")
+    # probe = NonLinearProbe.load(model, "0c8d9e05dd39")
+    scores, preds = eval_probe(model, probe, dataset, 256)
+    corr = pearson(scores, preds)
+    px.scatter(
+        x=scores,
+        y=preds,
+        labels={"x":"True Score", "y":"Probe Prediction"},
+        title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
+        range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
+    )
 
 #%% generate completions from the post-trained model
 
@@ -225,10 +244,8 @@ if generate_new_completions:
         print(f"{green}Already have {len(completions)} completions, skipping generation{endc}")
     else:
         for idx in (bar:=tqdm(range(len(dataset)), total=n_target_completions)):
-            if len(completions) >= n_target_completions:
-                break
-            if idx in completions:
-                continue
+            if len(completions) >= n_target_completions: break
+            if idx in completions: continue
             
             ex = dataset[idx]
             user_prompt_toks = model.tokenizer.apply_chat_template(
@@ -238,14 +255,17 @@ if generate_new_completions:
             ).to(DEVICE)
             user_prompt_len = user_prompt_toks.shape[-1]
 
+            max_new_tokens = max_seq_len - user_prompt_len
+            if max_new_tokens <= 16: continue # if the user prompt alone exceeds or fills up the context window, skip it
             response_toks = model.generate(
                 user_prompt_toks,
                 do_sample=True,
                 verbose=False,
-                max_new_tokens=max_seq_len - user_prompt_len
+                max_new_tokens=max_new_tokens
             ).squeeze()
             prompt_completion_len = response_toks.shape[-1]
             completion_len = prompt_completion_len - user_prompt_len
+            if prompt_completion_len >= max_seq_len - 1: continue # if we hit the end of context before the model ending the completion naturally, toss it
 
             response_text = model.tokenizer.decode(response_toks)
             
