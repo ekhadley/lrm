@@ -16,6 +16,7 @@ hf_model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=DTYPE,
     device_map=DEVICE
 )
+
 hf_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
 model = HookedTransformer.from_pretrained(
@@ -30,6 +31,22 @@ model = HookedTransformer.from_pretrained(
 )
 model.requires_grad_(False)
 del hf_model
+t.cuda.empty_cache()
+
+#%%
+MODEL_ID = "mistral-7b"
+MODEL_NAME = MODEL_ID
+
+model = HookedTransformer.from_pretrained(
+    MODEL_ID,
+    device=DEVICE,
+    dtype=DTYPE,
+    fold_ln=False,
+    center_writing_weights=False,
+    center_unembed=False,
+    tokenizer=hf_tokenizer
+)
+model.requires_grad_(False)
 t.cuda.empty_cache()
 
 #%% example response generation
