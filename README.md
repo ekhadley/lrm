@@ -13,18 +13,6 @@ Language models have been trained via some kind of rl on human preference data (
 
 ## notes
 
-- is this model/dataset choice bad? (zephyr, a post train of mistral 1 7b from a gpt4-rated RLAIF completion dataset)
-    - the labels are by gpt4, so pretty noisy
-    - the model/dataset are around 2 years old
-    - could we just... make a better model and dataset?
-        - would involve getting a chat dataset,
-        - rating each completion with some more modern model
-            - 4o? sonnet 4.5? Not sure what the returns to scale are for something like this.
-            - probably a gemini actually, they are pretty pareto optimal
-        - training a chat model using this
-            - sft? dpo? How exactly does the training scheme effect what the model is expected to learn or is incentivized to do?
-                - I assume that whatever an AI completion rater is picking up on is also already represented linearly in the subject model and we are just promoting that direction or close to it during fting. so the probe can basically do the same thing?
-
 - current best hparams: linear probe, 24.resid_pre, lr=1e-4, bs=8, seq_pos=-1, wd=1e-4
     - I trained a nonlinear probe, it was not better than the probe and a bit slower so yeah. Sticking with linear.
 
@@ -36,7 +24,11 @@ Language models have been trained via some kind of rl on human preference data (
 
 - agenda:
     - demonstrate that the trained model's completions receive higher reward according to the probe than the pre-rl model's completions
-    - train the probe on different sequence positions in the assistnat response, as well as at the very end of the user prompt, where no completion tokens are present.
+    - train the probe on different sequence positions in the assisant response, as well as at the very end of the user prompt, where no completion tokens are present.
+
+- wait:
+    - `if dpo is just teaching the model to produce sequences that get high reward, can we just use the model to directly generate user sequences to see which tokens it likes more?`
+    - the way 
 
 ## todo
 - sweep across layers and sequence positions

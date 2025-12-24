@@ -16,7 +16,6 @@ hf_model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=DTYPE,
     device_map=DEVICE
 )
-
 hf_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
 model = HookedTransformer.from_pretrained(
@@ -31,22 +30,6 @@ model = HookedTransformer.from_pretrained(
 )
 model.requires_grad_(False)
 del hf_model
-t.cuda.empty_cache()
-
-#%%
-MODEL_ID = "mistral-7b"
-MODEL_NAME = MODEL_ID
-
-model = HookedTransformer.from_pretrained(
-    MODEL_ID,
-    device=DEVICE,
-    dtype=DTYPE,
-    fold_ln=False,
-    center_writing_weights=False,
-    center_unembed=False,
-    tokenizer=hf_tokenizer
-)
-model.requires_grad_(False)
 t.cuda.empty_cache()
 
 #%% example response generation
@@ -223,40 +206,67 @@ generate_new_completions = True
 if generate_new_completions:
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
-    n_new_completions = 512
+    n_target_completions = 512
     max_seq_len = model.cfg.n_ctx - 1
+    save_every = 10
+    completions_path = f"./data/{MODEL_NAME}_completions.json"
     
-    completions = []
-    n_generated = 0
-    for ex in (bar:=tqdm(dataset, total=n_new_completions)):
-        if n_generated >= n_new_completions: break
-        completions.append(ex)
-        user_prompt_toks = model.tokenizer.apply_chat_template(
-            [{"role":"user","content": ex["prompt"]}],
-            return_tensors="pt",
-            add_generation_prompt=True,
-        ).to(DEVICE)
-        user_prompt_len = user_prompt_toks.shape[-1]
+    # Load existing completions if file exists
+    os.makedirs("./data", exist_ok=True)
+    if os.path.exists(completions_path):
+        with open(completions_path, "r") as f:
+            data = json.load(f)
+            completions = {c["idx"]: c for c in data.get("completions", [])}
+    else:
+        completions = {}
+    
+    # Check if we already have enough
+    if len(completions) >= n_target_completions:
+        print(f"{green}Already have {len(completions)} completions, skipping generation{endc}")
+    else:
+        for idx in (bar:=tqdm(range(len(dataset)), total=n_target_completions)):
+            if len(completions) >= n_target_completions:
+                break
+            if idx in completions:
+                continue
+            
+            ex = dataset[idx]
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role":"user","content": ex["prompt"]}],
+                return_tensors="pt",
+                add_generation_prompt=True,
+            ).to(DEVICE)
+            user_prompt_len = user_prompt_toks.shape[-1]
 
-        response_toks = model.generate(
-            user_prompt_toks,
-            do_sample=True,
-            verbose=False,
-            max_new_tokens=max_seq_len - user_prompt_len
-        ).squeeze()
-        prompt_completion_len = response_toks.shape[-1]
-        completion_len = prompt_completion_len - user_prompt_len
+            response_toks = model.generate(
+                user_prompt_toks,
+                do_sample=True,
+                verbose=False,
+                max_new_tokens=max_seq_len - user_prompt_len
+            ).squeeze()
+            prompt_completion_len = response_toks.shape[-1]
+            completion_len = prompt_completion_len - user_prompt_len
 
-        response_text = model.tokenizer.decode(response_toks)
-        
-        completions[-1]["new_completion"] = response_text
-        completions[-1]["completion_ids"] = response_toks.tolist()
-        n_generated += 1
+            response_text = model.tokenizer.decode(response_toks)
+            
+            completions[idx] = {
+                "idx": idx,
+                **dict(ex),
+                "new_completion": response_text,
+                "completion_ids": response_toks.tolist(),
+            }
 
-        bar.set_description(f"{lime}generated {user_prompt_len}+{completion_len} toks{endc}")
+            bar.set_description(f"{lime}[{len(completions)}/{n_target_completions}] generated {user_prompt_len}+{completion_len} toks{endc}")
 
-    with open(f"./data/{MODEL_NAME}_completions.json", "w") as f:
-        json.dump({"model":MODEL_NAME, "completions":completions}, f, indent=2)
+            # Periodically save
+            if len(completions) % save_every == 0:
+                with open(completions_path, "w") as f:
+                    json.dump({"model": MODEL_NAME, "completions": list(completions.values())}, f, indent=2)
+
+        # Final save
+        with open(completions_path, "w") as f:
+            json.dump({"model": MODEL_NAME, "completions": list(completions.values())}, f, indent=2)
+        print(f"{green}Saved {len(completions)} completions to {completions_path}{endc}")
     
     t.cuda.empty_cache()
 
