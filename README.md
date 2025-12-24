@@ -1,7 +1,8 @@
 # Do language models model expected rewards?
-- total time: 12 hrs
+- total time: 13 hrs
 ### Summary
-Language models have been trained via some kind of rl on human preference data (or ai preference data). Language models thus are trained to steer their outputs to get high reward from the supervision process. (This used to be done with explicit reward models but now is done via direct optimization of the models, using their own knowledge as implicit reward models, but this isnt a load bearing fact.) Models most likely represent some form of their expected reward during generation. Can we try and elicit this information from the model? What effects the model's estimate of reward? How do the user's messages factor in?
+After pretraining, modern models are trained via some kind of RL using feedback datasets (winner/loser completion pairs, human likert ratings, ai ratings, etc). These teach them to produce generations that rate higher via the scoring process than the original model. Now there is also RLVR, aiming to make model's completions more likelt to satisfy some automatic grader for math/coding tasks.  
+This project was chosen to get at a broad question: What tokens do models like to see in their inputs? The idea of what tokens models 'like' to produce is a clearer concept. Over the course of posttraining, the model produces responses that it estimates will receive higher reward from the grader. We can take a particular rollout and give it to both the pre-posttraining and post-posttraining model to see how much more likely the postraining made the model to generate that response. But what does this mean when we are considering inputs? Well, assuming the model has some estimate of its expected reward 
 
 ## goal
 - models are trained via RL of various kinds to produce certain kinds of completions and not others. I hypothesize that models probably have some estimate of the expected reward from the rater they were trained for
@@ -13,22 +14,27 @@ Language models have been trained via some kind of rl on human preference data (
 
 ## notes
 
-- current best hparams: linear probe, 24.resid_pre, lr=1e-4, bs=8, seq_pos=-1, wd=1e-4
+
+- current two methods for obtaining reward (assuming the model was trained via DPO on winner/loser completion pairs)
+    - we can train a probe on the model's activations to predict the 1-10 RLAIF ratings of the completion
+        - this gives us an 'absolute reward'. One that is not invariant to a shift.
+        - allows us to compare the rewawrd of two different completions to two different prompts.
+            - Or just the prompts themselves
+    - IF we have a pair of completions for the same prompt, we can find out how much more likely the posttrained model is to generate one completion vs the other.
+        - this is just how DPO estimates the (shift invariant) reward.
+
+- current best rating estimate probe hparams: linear probe, 24.resid_pre, lr=1e-4, bs=8, seq_pos=-1, wd=1e-4
     - I trained a nonlinear probe, it was not better than the probe and a bit slower so yeah. Sticking with linear.
 
-- alternatively, we could train a probe on completions from the pre and post postraining model and have it calssify which model it thinks the completion came from.
-    - `what would this tell us?`
-    - a probe trained on the ground truth completion ratings tells us if the model contains enough info to estimate the things the rater cares about
-        - this is potentially different from what the model *learns* to care about.
-    - dpo is directly training, given winner/loser completion pairs, to maximize the difference between the model's likelihood to produce the losing completion and its likelihood to produce the winning one.
+- `if dpo is just teaching the model to produce sequences that get high reward, can we just use the model to directly generate user sequences to see which tokens it likes more?`
+    - We would need a way of testing to see if the post-trained model's completions of the user prompt score higher on the DPO objective than the un-post-trained model's completions. 
+    - how to get this if we don't have any dataset of 'prompt ratings' (as opposed to completion ratings which we do have datasets for)
+        - The reward estimate probe would be another way to estimate this. making this method equivalent in a way to the 'do MCTS for rollouts that the probe likes' method.
+    - we could also just sample rollouts and look for those where the difference in the prob of the rollout between the posttrained and base models is largest
 
-- agenda:
-    - demonstrate that the trained model's completions receive higher reward according to the probe than the pre-rl model's completions
-    - train the probe on different sequence positions in the assisant response, as well as at the very end of the user prompt, where no completion tokens are present.
+- estimating reward from the prompt is really hard.
+    - models do some planning ahead of time, but imagining what your entire response will look like or how it will score to the rater is a pretty deep lookahead
 
-- wait:
-    - `if dpo is just teaching the model to produce sequences that get high reward, can we just use the model to directly generate user sequences to see which tokens it likes more?`
-    - the way 
 
 ## todo
 - sweep across layers and sequence positions
