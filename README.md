@@ -50,6 +50,8 @@ This project was chosen to get at a broad question: What tokens do models like t
 ## todo
 - sweep across layers and sequence positions to see where probe is best
 
+- train the probe on the base model, mistral, and see if there's any drop in effectiveness. I'd be surprised.
+
 - figure out if the probe's estimates are correlated with the relative likelihood of the post-trained model to generate a certain completion relative to the base model. 
     - Write a function that will take a prompt+completion and  two models, and returns the difference in the sum of logprobs for the completion tokens for the two models
         - This is the 'implicit reward', the posttrained model's estimate of how much better the completion is. It's something DPO trains the policy to maximize.

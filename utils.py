@@ -628,10 +628,18 @@ def generate_with_logit_diff_amplification(
     prompt_len = input_ids.shape[1]
     generated_ids = []
     
-    # Get EOS token id
-    eos_token_id = tokenizer.eos_token_id
-    if eos_token_id is None:
-        eos_token_id = tokenizer.pad_token_id
+    # Build set of stop token ids
+    stop_token_ids = set()
+    if tokenizer.eos_token_id is not None:
+        stop_token_ids.add(tokenizer.eos_token_id)
+    if tokenizer.pad_token_id is not None:
+        stop_token_ids.add(tokenizer.pad_token_id)
+    # Also check for </s> token explicitly (common in mistral/zephyr)
+    eos_tokens_to_check = ["</s>", "<|endoftext|>", "<|end|>"]
+    for tok_str in eos_tokens_to_check:
+        tok_ids = tokenizer.encode(tok_str, add_special_tokens=False)
+        if len(tok_ids) == 1:
+            stop_token_ids.add(tok_ids[0])
     
     for step in range(max_new_tokens):
         with t.inference_mode():
@@ -691,8 +699,8 @@ def generate_with_logit_diff_amplification(
                 token_str = tokenizer.decode([next_token_id])
                 print(token_str, end="", flush=True)
             
-            # Check for EOS
-            if stop_at_eos and next_token_id == eos_token_id:
+            # Check for EOS / stop tokens
+            if stop_at_eos and next_token_id in stop_token_ids:
                 break
             
             # Append to input for next iteration
