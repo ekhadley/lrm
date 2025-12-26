@@ -200,6 +200,15 @@ def train_dpo(
         peft_config=peft_config,
     )
     
+    # Test merge and push before training
+    if hub_repo_id:
+        print("Testing merge and push before training...")
+        trainer.model.merge_adapter()  # Merge adapter weights into base
+        trainer.model.push_to_hub(hub_repo_id, commit_message="Pre-training test (merged)")
+        tokenizer.push_to_hub(hub_repo_id, commit_message="Add tokenizer")
+        trainer.model.unmerge_adapter()  # Unmerge so we can continue training
+        print(f"Test push complete: https://huggingface.co/{hub_repo_id}")
+    
     # Train
     print("Starting DPO training...")
     trainer.train()
@@ -209,11 +218,14 @@ def train_dpo(
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
     
-    # Push to Hub
+    # Push to Hub (merge adapter into base model first)
     if hub_repo_id:
-        print(f"Pushing model to Hub: {hub_repo_id}")
-        trainer.push_to_hub(repo_id=hub_repo_id, commit_message="DPO training complete")
-        tokenizer.push_to_hub(repo_id=hub_repo_id, commit_message="Add tokenizer")
+        print(f"Merging adapter into base model...")
+        merged_model = trainer.model.merge_and_unload()
+        
+        print(f"Pushing merged model to Hub: {hub_repo_id}")
+        merged_model.push_to_hub(hub_repo_id, commit_message="DPO training complete (merged)")
+        tokenizer.push_to_hub(hub_repo_id, commit_message="Add tokenizer")
         print(f"Model pushed to https://huggingface.co/{hub_repo_id}")
     
     if use_wandb:
