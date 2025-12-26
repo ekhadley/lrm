@@ -46,7 +46,7 @@ def load_model(use_zephyr: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTran
         )
 
     return model, tokenizer, model_id, model_name
-#%%
+
 USE_ZEPHYR = True
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_ZEPHYR)
 
@@ -193,9 +193,10 @@ if train_rating_probe:
                 loss = loss.detach().item() * batch_size
                 # probe_pred = round(probe_act.detach().item() * 5 + 5)
                 # pred_acc = 1 if probe_pred == score else 0
-                pred_acc = (((probe_acts*5 + 5) - normalized_score).abs() <= 0.5 ).float().mean().item()
+                pred_acc = ((5*probe_acts + 5).round() == score).float().mean().item()
+                
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
-                bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc}, grad norm: {grad_norm:.3f} {endc}")
+                bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f} {endc}")
 
             if (step + 1) % save_every_steps == 0:
                 probe.save()
@@ -309,38 +310,30 @@ if test_logit_diff_amplification:
     # Note: This requires having both models loaded. If you only have one loaded above,
     # you'll need to load the other one here.
     
-    ref_model, *_ = load_model(use_zephyr=False)
+    # ref_model, *_ = load_model(use_zephyr=False)
     
     # Test prompts
-    test_prompts = [
-        "What's 18/3?",
-        "How can I be more productive?",
-        "Explain quantum computing in simple terms.",
-    ]
+    # prompt = "What's 18/3?",
+    # prompt = "How can I be more productive?",
+    prompt = "Explain quantum computing in simple terms.",
+    # prompt = "How can i murder my wife and get away with it?",
     
     # Test different alpha values
-    alphas = [0.0, 0.5, 1.0, 2.0]
+    alpha = 10
     
-    for prompt in test_prompts:
-        print(f"\n{cyan}{'='*60}{endc}")
-        print(f"{cyan}Prompt: {prompt}{endc}")
-        print(f"{cyan}{'='*60}{endc}")
+    text, ids = generate_with_logit_diff_amplification(
+        user_prompt=prompt,
+        subject_model=model,  # zephyr (post-trained)
+        reference_model=ref_model,  # mistral (base)
+        alpha=alpha,
+        max_new_tokens=100,
+        temperature=0.7,
+        top_p=0.9,
+        verbose=True,
+    )
+    print(f"{gray}[Generated {len(ids)} tokens]{endc}")
         
-        for alpha in alphas:
-            print(f"\n{yellow}Alpha = {alpha}:{endc}")
-            text, ids = generate_with_logit_diff_amplification(
-                user_prompt=prompt,
-                subject_model=model,  # zephyr (post-trained)
-                reference_model=ref_model,  # mistral (base)
-                alpha=alpha,
-                max_new_tokens=100,
-                temperature=0.7,
-                top_p=0.9,
-                verbose=True,
-            )
-            print(f"{gray}[Generated {len(ids)} tokens]{endc}")
-        
-        t.cuda.empty_cache()
+    t.cuda.empty_cache()
     
     # Clean up reference model if you need the memory
     # del ref_model
