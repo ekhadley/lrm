@@ -119,7 +119,6 @@ if train_rating_probe:
         dataset = datasets.load_dataset(dataset_id, split="train")
         train_dtype = t.float32
         probe = LinearProbe(model, probe_layer, probe_act_name)
-        # probe = NonLinearProbe(model, probe_layer, probe_act_name)
         print(f"{green}Probe name: {probe.hash_name}{endc}")
 
         opt = t.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99))
@@ -150,7 +149,6 @@ if train_rating_probe:
                 if seq_len >= model.cfg.n_ctx: continue
 
                 if target_user_prompt:
-                    # Find user prompt end by tokenizing just the user message
                     user_prompt_toks = model.tokenizer.apply_chat_template(
                         [{"role":"user","content": ex["prompt"]}],
                         add_generation_prompt=True,
@@ -167,7 +165,6 @@ if train_rating_probe:
                     stop_at_layer=probe_layer + 1,
                     names_filter=[probe_act_name]
                 )
-                # Extract target position first, then cast dtype (saves memory)
                 target_act = cache[probe_act_name].squeeze()[target_act_seq_pos].to(train_dtype)
                 del cache
 
@@ -209,166 +206,6 @@ if train_rating_probe:
         )
         fig.show()
         
-        t.cuda.empty_cache()
-
-#%% train probe with proper batching (no gradient accumulation)
-
-from utils import LinearProbe, NonLinearProbe, eval_probe
-
-train_rating_probe_batched = False
-if train_rating_probe_batched:
-    probe_layer = 24
-    for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
-        probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-        lr = 1e-4
-        batch_size = 8
-        epochs = 1
-        weight_decay = 1e-3
-        target_user_prompt = False
-        dataset_id = "eekay/ultrafeedback-balanced"
-        save_every_steps = 500
-
-        dataset = datasets.load_dataset(dataset_id, split="train")
-        train_dtype = t.float32
-        probe = LinearProbe(model, probe_layer, probe_act_name)
-        print(f"{green}Probe name: {probe.hash_name}{endc}")
-
-        opt = t.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99))
-
-        run_cfg = {
-            "lr": lr,
-            "batch_size": batch_size,
-            "act_name": probe_act_name,
-            "dtype": str(train_dtype),
-            "hash_name": probe.hash_name,
-            "dataset_id": dataset_id,
-            "target_user_prompt": target_user_prompt,
-            "weight_decay": weight_decay,
-            "note": "proper batching"
-        }
-        wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
-
-        step = 0
-        batch_examples = []
-        
-        for e in range(epochs):
-            for ex in (bar := tqdm(dataset)):
-                messages = [{"role": "user", "content": ex["prompt"]}, {"role": "assistant", "content": ex["response"]}]
-                conversation_toks = model.tokenizer.apply_chat_template(
-                    messages,
-                    return_tensors="pt",
-                ).squeeze()
-                seq_len = conversation_toks.shape[0]
-                if seq_len >= model.cfg.n_ctx:
-                    continue
-
-                user_prompt_toks = model.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": ex["prompt"]}],
-                    add_generation_prompt=True,
-                )
-                user_prompt_len = len(user_prompt_toks)
-
-                if target_user_prompt:
-                    target_act_seq_pos = len(user_prompt_toks) - 1
-                else:
-                    target_act_seq_pos = -1
-
-                score = ex["score"]
-                normalized_score = (score - 5.0) / 5.0
-
-                batch_examples.append({
-                    "toks": conversation_toks,
-                    "target_pos": target_act_seq_pos,
-                    "score": score,
-                    "normalized_score": normalized_score,
-                })
-
-                if len(batch_examples) < batch_size:
-                    continue
-
-                # Pad sequences to same length for batching
-                max_len = max(ex["toks"].shape[0] for ex in batch_examples)
-                pad_token_id = model.tokenizer.pad_token_id or model.tokenizer.eos_token_id
-                
-                padded_toks = []
-                target_positions = []
-                scores_batch = []
-                normalized_scores_batch = []
-                
-                for batch_ex in batch_examples:
-                    toks = batch_ex["toks"]
-                    seq_len = toks.shape[0]
-                    # Pad on the left so that position -1 still refers to the last real token
-                    padding = t.full((max_len - seq_len,), pad_token_id, dtype=toks.dtype)
-                    padded = t.cat([padding, toks], dim=0)
-                    padded_toks.append(padded)
-                    
-                    # Adjust target position for left-padding
-                    if batch_ex["target_pos"] == -1:
-                        target_positions.append(max_len - 1)
-                    else:
-                        target_positions.append(batch_ex["target_pos"] + (max_len - seq_len))
-                    
-                    scores_batch.append(batch_ex["score"])
-                    normalized_scores_batch.append(batch_ex["normalized_score"])
-
-                batched_toks = t.stack(padded_toks).to(DEVICE)
-                target_positions = t.tensor(target_positions, device=DEVICE)
-                normalized_scores_tensor = t.tensor(normalized_scores_batch, dtype=train_dtype, device=DEVICE)
-
-                # Forward pass with batched input
-                _, cache = model.run_with_cache(
-                    batched_toks,
-                    stop_at_layer=probe_layer + 1,
-                    names_filter=[probe_act_name]
-                )
-                acts = cache[probe_act_name].to(train_dtype)  # (batch, seq, d_model)
-                
-                # Extract target activations for each example in batch
-                batch_indices = t.arange(batch_size, device=DEVICE)
-                target_acts = acts[batch_indices, target_positions]  # (batch, d_model)
-
-                # Probe forward on batch
-                probe_preds = probe.forward(target_acts)  # (batch,)
-                
-                # Compute loss
-                loss = t.abs(normalized_scores_tensor - probe_preds).mean()
-                
-                loss.backward()
-                grad_norm = probe.grad_norm()
-                opt.step()
-                opt.zero_grad()
-
-                with t.inference_mode():
-                    probe_norm = probe.weight_norm()
-                    loss_val = loss.detach().item()
-                    pred_acc = ((probe_preds.detach() * 5 + 5).round() == t.tensor(scores_batch, device=DEVICE)).float().mean().item()
-                    
-                    wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc})
-                    bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}{endc}")
-
-                if (step + 1) % save_every_steps == 0:
-                    probe.save()
-
-                step += 1
-                batch_examples = []
-                t.cuda.empty_cache()
-
-        wandb.finish()
-        probe.save()
-        print(f"{green}Training complete. Final checkpoint saved at step {step}. Evaluating probe...{endc}")
-
-        scores, preds = eval_probe(model, probe, dataset, 256)
-        corr = pearson(scores, preds)
-        fig = px.scatter(
-            x=scores,
-            y=preds,
-            labels={"x": "True Score", "y": "Probe Prediction"},
-            title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
-            range_y=[0, 11], range_x=[0, 11], height=1000, width=1000, template="plotly_dark"
-        )
-        fig.show()
-
         t.cuda.empty_cache()
 
 #%% generate completions from the post-trained model
@@ -450,7 +287,6 @@ if generate_new_completions:
 # )
 
 #%%
-
 
 
 

@@ -97,7 +97,7 @@ class LinearProbe:
         return self.probe.norm().item()
 
     def forward(self, act: Tensor) -> Tensor:
-        return self.probe @ act
+        return einsum(self.probe, act, "d_model, d_model -> ")
     
     def get_pred(self, act: Tensor) -> Tensor:
         probe_pred = self.forward(act).item() * 5 + 5
