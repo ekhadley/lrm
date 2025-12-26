@@ -1,7 +1,4 @@
 #%%
-"""
-DPO Training Script for Mistral-7B-Instruct using UltraFeedback Binarized Dataset
-"""
 
 import torch as t
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -12,18 +9,20 @@ import wandb
 
 # ============================= Config ============================= #
 
+#%%
+
 DEVICE = "cuda"
 DTYPE = t.bfloat16
 
 # Model config
-MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
 USE_QLORA = True  # Use QLoRA for memory efficiency
 
 # Training config
 OUTPUT_DIR = "./dpo_output"
 LEARNING_RATE = 5e-7
-BATCH_SIZE = 2
-GRADIENT_ACCUMULATION_STEPS = 8
+BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
 MAX_LENGTH = 1024
 MAX_PROMPT_LENGTH = 512
@@ -61,7 +60,7 @@ def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLO
             quantization_config=bnb_config,
             device_map="auto",
             torch_dtype=DTYPE,
-            attn_implementation="flash_attention_2",
+            # attn_implementation="flash_attention_2",
         )
         model = prepare_model_for_kbit_training(model)
         
@@ -85,7 +84,7 @@ def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLO
     
     return model, tokenizer, peft_config
 
-# ============================= Load Dataset ============================= #
+#%%
 
 def load_ultrafeedback_dataset():
     """Load and format the UltraFeedback binarized dataset for DPO."""
@@ -139,7 +138,7 @@ def load_ultrafeedback_dataset():
     
     return formatted_dataset
 
-# ============================= Training ============================= #
+#%%
 
 def train_dpo(
     model,
@@ -213,7 +212,7 @@ def train_dpo(
     
     return trainer
 
-# ============================= Main ============================= #
+#%%
 
 if __name__ == "__main__":
     # Load model and tokenizer
@@ -233,3 +232,4 @@ if __name__ == "__main__":
     
     print("DPO training complete!")
 
+#%%
