@@ -285,6 +285,7 @@ if generate_new_completions:
 
 merge_completions = True
 if merge_completions:
+    from utils import merge_model_completions
     merge_model_completions(
         "./data/zephyr-7b-beta_completions.json",
         "./data/mistral-7b_completions.json",

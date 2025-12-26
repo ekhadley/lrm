@@ -529,18 +529,34 @@ def merge_model_completions(
         
         text1 = c1.get("new_completion", "")
         text2 = c2.get("new_completion", "")
+        prompt = c1.get("prompt", c2.get("prompt"))
         
         # Filter by token length if tokenizer provided
+        # We need to check the length of the full templated conversation
         if tokenizer is not None:
-            len1 = len(tokenizer.encode(text1))
-            len2 = len(tokenizer.encode(text2))
+            assistant_marker = "<|assistant|>\n"
+            
+            # Extract assistant response from text1 and check length
+            assistant_start = text1.index(assistant_marker) + len(assistant_marker)
+            assistant_response1 = text1[assistant_start:].rstrip("</s>").strip()
+            
+            conv1 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_response1}]
+            len1 = len(tokenizer.apply_chat_template(conv1))
+            
+            # Extract assistant response from text2 and check length  
+            assistant_start = text2.index(assistant_marker) + len(assistant_marker)
+            assistant_response2 = text2[assistant_start:].rstrip("</s>").strip()
+                
+            conv2 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_response2}]
+            len2 = len(tokenizer.apply_chat_template(conv2))
+            
             if len1 >= max_seq_len or len2 >= max_seq_len:
                 n_skipped_too_long += 1
                 continue
         
         merged_completions.append({
             "idx": idx,
-            "prompt": c1.get("prompt", c2.get("prompt")),
+            "prompt": prompt,
             "completions": {
                 model1_name: {
                     "text": text1,
