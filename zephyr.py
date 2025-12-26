@@ -281,13 +281,13 @@ if generate_new_completions:
     
     t.cuda.empty_cache()
 
-#%%
+#%% merging the completions from the two models into one dataset
 
-# merge_model_completions(
-#     "./data/zephyr-7b-beta_completions.json",
-#     "./data/mistral-7b_completions.json",
-#     "./data/merged_completions.json"
-# )
+merge_model_completions(
+    "./data/zephyr-7b-beta_completions.json",
+    "./data/mistral-7b_completions.json",
+    "./data/merged_completions.json"
+)
 
 #%% getting the sum of logprobs of the completions we created using the base and posttrained model
 
@@ -311,6 +311,7 @@ if compute_likelihoods:
         ref_model
     except NameError:
         ref_model = None
+
     if ref_model is None:
         print(f"{yellow}Loading reference model (mistral)...{endc}")
         ref_model, *_ = load_model(use_zephyr=False)
@@ -325,6 +326,7 @@ if compute_likelihoods:
     # Count how many need computing
     n_total = len(merged_data["completions"]) * len(model_names) * len(model_names)
     n_computed = 0
+    assistant_marker = "<|assistant|>\n"
     
     for entry in tqdm(merged_data["completions"], desc="Computing likelihoods"):
         prompt = entry["prompt"]
@@ -347,7 +349,6 @@ if compute_likelihoods:
                 # Build conversation from prompt and completion
                 # The completion_text is the full templated output, need to extract assistant response
                 # Format: <|user|>\n{prompt}</s>\n<|assistant|>\n{response}</s>
-                assistant_marker = "<|assistant|>\n"
                 assistant_start = completion_text.index(assistant_marker) + len(assistant_marker)
                 assistant_response = completion_text[assistant_start:].rstrip("</s>").strip()
                 
@@ -367,8 +368,80 @@ if compute_likelihoods:
     
     t.cuda.empty_cache()
 
+#%% populate probe_reward for each completion
 
+from utils import LinearProbe
 
+compute_probe_rewards = True
+if compute_probe_rewards:
+    merged_path = "./data/merged_completions.json"
+    probe_hash = "029e8d45602c"
+    
+    # Load merged completions
+    with open(merged_path, "r") as f:
+        merged_data = json.load(f)
+    
+    model_names = merged_data["models"]
+    
+    # Load probe (uses zephyr model which should already be loaded)
+    probe = LinearProbe.load(model, probe_hash)
+    print(f"Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name})")
+
+    
+    assistant_marker = "<|assistant|>\n"
+    n_computed = 0
+    for entry in tqdm(merged_data["completions"], desc="Computing probe rewards"):
+        prompt = entry["prompt"]
+        
+        for completion_model_name in model_names:
+            completion_data = entry["completions"][completion_model_name]
+            
+            # Skip if already computed
+            if completion_data.get("probe_reward") is not None:
+                continue
+            
+            completion_text = completion_data["text"]
+            
+            # Extract assistant response
+            assistant_start = completion_text.index(assistant_marker) + len(assistant_marker)
+            assistant_response = completion_text[assistant_start:].rstrip("</s>").strip()
+            
+            # Build conversation and tokenize
+            messages = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": assistant_response}
+            ]
+            conversation_toks = model.tokenizer.apply_chat_template(
+                messages,
+                return_tensors="pt",
+            ).squeeze().to(DEVICE)
+            
+            seq_len = conversation_toks.shape[0]
+            if seq_len >= model.cfg.n_ctx:
+                print(f"{yellow}Skipping idx {entry['idx']} - too long ({seq_len} tokens){endc}")
+                continue
+            
+            # Get activation at last position and compute probe prediction
+            with t.inference_mode():
+                _, cache = model.run_with_cache(
+                    conversation_toks,
+                    stop_at_layer=probe.layer + 1,
+                    names_filter=[probe.act_name]
+                )
+                target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+                del cache
+                
+                probe_reward = probe.get_pred(target_act)
+            
+            completion_data["probe_reward"] = probe_reward
+            n_computed += 1
+    
+    # Save
+    with open(merged_path, "w") as f:
+        json.dump(merged_data, f, indent=2)
+    print(f"{green}Done! Computed {n_computed} probe rewards, saved to {merged_path}{endc}")
+    
+    t.cuda.empty_cache()
 
 #%%
 

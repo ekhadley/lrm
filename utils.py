@@ -477,14 +477,16 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
                             "likelihood": {
                                 "model1_name": null,
                                 "model2_name": null
-                            }
+                            },
+                            "probe_reward": null
                         },
                         "model2_name": {
                             "text": "generated text...",
                             "likelihood": {
                                 "model1_name": null,
                                 "model2_name": null
-                            }
+                            },
+                            "probe_reward": null
                         }
                     }
                 },
@@ -493,7 +495,7 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
         }
     
     Only includes examples where both models have a completion.
-    Likelihood values are initialized to null and should be filled in later.
+    Likelihood and probe_reward values are initialized to null and should be filled in later.
     """
     with open(file1, "r") as f:
         data1 = json.load(f)
@@ -524,14 +526,16 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
                     "likelihood": {
                         model1_name: None,
                         model2_name: None,
-                    }
+                    },
+                    "probe_reward": None,
                 },
                 model2_name: {
                     "text": c2.get("new_completion", ""),
                     "likelihood": {
                         model1_name: None,
                         model2_name: None,
-                    }
+                    },
+                    "probe_reward": None,
                 },
             }
         })
