@@ -641,6 +641,7 @@ def generate_with_logit_diff_amplification(
         if len(tok_ids) == 1:
             stop_token_ids.add(tok_ids[0])
     
+    prev_text = ""  # For verbose streaming output
     for step in range(max_new_tokens):
         with t.inference_mode():
             # Get logits from both models
@@ -696,8 +697,12 @@ def generate_with_logit_diff_amplification(
             generated_ids.append(next_token_id)
             
             if verbose:
-                token_str = tokenizer.decode([next_token_id])
-                print(token_str, end="", flush=True)
+                # Decode all generated tokens together to preserve spacing
+                current_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+                # Print only the new characters since last decode
+                new_chars = current_text[len(prev_text):]
+                print(new_chars, end="", flush=True)
+                prev_text = current_text
             
             # Check for EOS / stop tokens
             if stop_at_eos and next_token_id in stop_token_ids:
