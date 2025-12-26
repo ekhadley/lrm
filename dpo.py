@@ -20,7 +20,8 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 
 # Training config
 OUTPUT_DIR = "./dpo_output"
-HUB_REPO_ID = "eekay/mistral-7b-instruct-dpo"  # Hub repo to push trained model
+HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
+HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
 LEARNING_RATE = 5e-7
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
@@ -148,7 +149,8 @@ def train_dpo(
     peft_config=None,
     output_dir: str = OUTPUT_DIR,
     use_wandb: bool = True,
-    hub_repo_id: str = HUB_REPO_ID,
+    hub_repo_merged: str = HUB_REPO_ID_MERGED,
+    hub_repo_adapter: str = HUB_REPO_ID_ADAPTER,
 ):
     """Run DPO training."""
     
@@ -201,13 +203,22 @@ def train_dpo(
     )
     
     # Test merge and push before training
-    if hub_repo_id:
-        print("Testing merge and push before training...")
-        trainer.model.merge_adapter()  # Merge adapter weights into base
-        trainer.model.push_to_hub(hub_repo_id, commit_message="Pre-training test (merged)")
-        tokenizer.push_to_hub(hub_repo_id, commit_message="Add tokenizer")
-        trainer.model.unmerge_adapter()  # Unmerge so we can continue training
-        print(f"Test push complete: https://huggingface.co/{hub_repo_id}")
+    if hub_repo_merged or hub_repo_adapter:
+        print("Testing push before training...")
+        
+        # Push adapter
+        if hub_repo_adapter:
+            trainer.model.push_to_hub(hub_repo_adapter, commit_message="Pre-training test (adapter)")
+            tokenizer.push_to_hub(hub_repo_adapter, commit_message="Add tokenizer")
+            print(f"Adapter push complete: https://huggingface.co/{hub_repo_adapter}")
+        
+        # Push merged model
+        if hub_repo_merged:
+            trainer.model.merge_adapter()
+            trainer.model.push_to_hub(hub_repo_merged, commit_message="Pre-training test (merged)")
+            tokenizer.push_to_hub(hub_repo_merged, commit_message="Add tokenizer")
+            trainer.model.unmerge_adapter()
+            print(f"Merged push complete: https://huggingface.co/{hub_repo_merged}")
     
     # Train
     print("Starting DPO training...")
@@ -218,15 +229,21 @@ def train_dpo(
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
     
-    # Push to Hub (merge adapter into base model first)
-    if hub_repo_id:
+    # Push to Hub
+    if hub_repo_adapter:
+        print(f"Pushing adapter to Hub: {hub_repo_adapter}")
+        trainer.model.push_to_hub(hub_repo_adapter, commit_message="DPO training complete (adapter)")
+        tokenizer.push_to_hub(hub_repo_adapter, commit_message="Add tokenizer")
+        print(f"Adapter pushed to https://huggingface.co/{hub_repo_adapter}")
+    
+    if hub_repo_merged:
         print(f"Merging adapter into base model...")
         merged_model = trainer.model.merge_and_unload()
         
-        print(f"Pushing merged model to Hub: {hub_repo_id}")
-        merged_model.push_to_hub(hub_repo_id, commit_message="DPO training complete (merged)")
-        tokenizer.push_to_hub(hub_repo_id, commit_message="Add tokenizer")
-        print(f"Model pushed to https://huggingface.co/{hub_repo_id}")
+        print(f"Pushing merged model to Hub: {hub_repo_merged}")
+        merged_model.push_to_hub(hub_repo_merged, commit_message="DPO training complete (merged)")
+        tokenizer.push_to_hub(hub_repo_merged, commit_message="Add tokenizer")
+        print(f"Merged model pushed to https://huggingface.co/{hub_repo_merged}")
     
     if use_wandb:
         wandb.finish()
