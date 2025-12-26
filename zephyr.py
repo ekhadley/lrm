@@ -536,7 +536,28 @@ if visualize_probe_rewards:
     )
     fig.show()
     fig.write_html("./figures/probe_rewards_vs_logprob_difference.html")
-
+    
+    # Bar chart of average probe reward by source model
+    avg_rewards = df.groupby("source_model")["probe_reward"].mean().reset_index()
+    avg_rewards.columns = ["source_model", "avg_probe_reward"]
+    
+    bar_fig = px.bar(
+        avg_rewards,
+        x="source_model",
+        y="avg_probe_reward",
+        color="source_model",
+        color_discrete_map=color_map,
+        labels={
+            "source_model": "Source Model",
+            "avg_probe_reward": "Average Probe Reward",
+        },
+        title="Average Probe Reward by Source Model",
+        template="plotly_dark",
+        height=500,
+        width=600,
+    )
+    bar_fig.show()
+    bar_fig.write_html("./figures/avg_probe_reward_by_model.html")
     
     # Print statistics for each source model
     for model_name in merged_data["models"]:
@@ -544,4 +565,68 @@ if visualize_probe_rewards:
         print(f"\n{model_name}:")
         print(f"  Logprob diff (zephyr - mistral): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
         print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
+
+#%% top k prompts with largest probe reward difference (zephyr - mistral)
+
+show_top_k_prompts = True
+if show_top_k_prompts:
+    from utils import red, blue, cyan, endc
+    
+    k = 10
+    assistant_marker = "<|assistant|>\n"
+    
+    merged_path = "./data/merged_completions.json"
+    with open(merged_path, "r") as f:
+        merged_data = json.load(f)
+    
+    # Compute probe reward difference for each prompt
+    prompt_diffs = []
+    for entry in merged_data["completions"]:
+        zephyr_data = entry["completions"].get("zephyr-7b-beta", {})
+        mistral_data = entry["completions"].get("mistral-7b", {})
+        
+        zephyr_reward = zephyr_data.get("probe_reward")
+        mistral_reward = mistral_data.get("probe_reward")
+        
+        if zephyr_reward is None or mistral_reward is None:
+            continue
+        
+        # Extract assistant responses from full text
+        zephyr_text = zephyr_data.get("text", "")
+        mistral_text = mistral_data.get("text", "")
+        
+        try:
+            zephyr_response = zephyr_text[zephyr_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
+            mistral_response = mistral_text[mistral_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
+        except ValueError:
+            continue
+        
+        reward_diff = zephyr_reward - mistral_reward
+        prompt_diffs.append({
+            "idx": entry["idx"],
+            "prompt": entry["prompt"],
+            "zephyr_reward": zephyr_reward,
+            "mistral_reward": mistral_reward,
+            "reward_diff": reward_diff,
+            "zephyr_response": zephyr_response,
+            "mistral_response": mistral_response,
+        })
+    
+    # Sort by reward difference (largest first)
+    prompt_diffs.sort(key=lambda x: x["reward_diff"], reverse=True)
+    
+    print(f"\n{'='*100}")
+    print(f"Top {k} prompts where Zephyr completions scored higher than Mistral (by probe reward)")
+    print(f"{'='*100}\n")
+    
+    for i, item in enumerate(prompt_diffs[:k]):
+        print(f"{cyan}#{i+1} (idx={item['idx']}) | Δreward = {item['reward_diff']:+.2f}{endc}")
+        print(f"{cyan}Prompt:{endc} {item['prompt'][:300]}{'...' if len(item['prompt']) > 300 else ''}")
+        print()
+        print(f"{blue}[Zephyr] (reward: {item['zephyr_reward']:.2f}):{endc}")
+        print(f"{item['zephyr_response'][:500]}{'...' if len(item['zephyr_response']) > 500 else ''}")
+        print()
+        print(f"{red}[Mistral] (reward: {item['mistral_reward']:.2f}):{endc}")
+        print(f"{item['mistral_response'][:500]}{'...' if len(item['mistral_response']) > 500 else ''}")
+        print(f"\n{'-'*100}\n")
 
