@@ -8,23 +8,23 @@ DTYPE = t.bfloat16
 
 #%% loading zephyr into mistral 7b the base model
 
-def load_model(use_zephyr: bool) -> tuple[HookedTransformer, AutoTokenizer]:
+def load_model(use_zephyr: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
     if use_zephyr:
-        MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
-        MODEL_NAME = MODEL_ID.split("/")[-1]
-        PARENT_MODEL_ID = "mistral-7b"
+        model_id = "HuggingFaceH4/zephyr-7b-beta"
+        model_name = model_id.split("/")[-1]
+        parent_model_id = "mistral-7b"
         hf_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            torch_dtype=DTYPE,
-            device_map=DEVICE
+            model_id,
+            torch_dtype=dtype,
+            device_map=device
         )
 
         model = HookedTransformer.from_pretrained(
-            PARENT_MODEL_ID,
+            parent_model_id,
             hf_model=hf_model,
-            device=DEVICE,
-            dtype=DTYPE,
+            device=device,
+            dtype=dtype,
             fold_ln=False,
             center_writing_weights=False,
             center_unembed=False,
@@ -33,22 +33,22 @@ def load_model(use_zephyr: bool) -> tuple[HookedTransformer, AutoTokenizer]:
         del hf_model
 
     else:
-        MODEL_ID = "mistral-7b"
-        MODEL_NAME = MODEL_ID
+        model_id = "mistral-7b"
+        model_name = model_id
         model = HookedTransformer.from_pretrained(
-            MODEL_ID,
-            device=DEVICE,
-            dtype=DTYPE,
+            model_id,
+            device=device,
+            dtype=dtype,
             fold_ln=False,
             center_writing_weights=False,
             center_unembed=False,
             tokenizer=tokenizer
         )
 
-    return model, tokenizer
-
+    return model, tokenizer, model_id, model_name
+#%%
 USE_ZEPHYR = True
-model, tokenizer = load_model(USE_ZEPHYR)
+model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_ZEPHYR)
 
 model.requires_grad_(False)
 t.cuda.empty_cache()
@@ -292,43 +292,24 @@ if generate_new_completions:
     
     t.cuda.empty_cache()
 
-#%%
 
-merge_model_completions(
-    "./data/zephyr-7b-beta_completions.json",
-    "./data/mistral-7b_completions.json",
-    "./data/merged_completions.json"
-)
+# merge_model_completions(
+#     "./data/zephyr-7b-beta_completions.json",
+#     "./data/mistral-7b_completions.json",
+#     "./data/merged_completions.json"
+# )
 
 #%%
 
 from utils import generate_with_logit_diff_amplification
 
-test_logit_diff_amplification = False
+test_logit_diff_amplification = True
 if test_logit_diff_amplification:
     # Load both models - zephyr (subject/post-trained) and mistral (reference/base)
     # Note: This requires having both models loaded. If you only have one loaded above,
     # you'll need to load the other one here.
     
-    # Load the base mistral model as reference
-    mistral_hf = AutoModelForCausalLM.from_pretrained(
-        "mistralai/Mistral-7B-v0.1",
-        torch_dtype=DTYPE,
-        device_map=DEVICE
-    )
-    mistral_model = HookedTransformer.from_pretrained(
-        "mistral-7b",
-        hf_model=mistral_hf,
-        device=DEVICE,
-        dtype=DTYPE,
-        fold_ln=False,
-        center_writing_weights=False,
-        center_unembed=False,
-        tokenizer=tokenizer
-    )
-    mistral_model.requires_grad_(False)
-    del mistral_hf
-    t.cuda.empty_cache()
+    ref_model, *_ = load_model(use_zephyr=False)
     
     # Test prompts
     test_prompts = [
@@ -350,7 +331,7 @@ if test_logit_diff_amplification:
             text, ids = generate_with_logit_diff_amplification(
                 user_prompt=prompt,
                 subject_model=model,  # zephyr (post-trained)
-                reference_model=mistral_model,  # mistral (base)
+                reference_model=ref_model,  # mistral (base)
                 alpha=alpha,
                 max_new_tokens=100,
                 temperature=0.7,
@@ -362,5 +343,5 @@ if test_logit_diff_amplification:
         t.cuda.empty_cache()
     
     # Clean up reference model if you need the memory
-    # del mistral_model
+    # del ref_model
     # t.cuda.empty_cache()
