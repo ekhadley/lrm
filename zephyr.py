@@ -283,11 +283,13 @@ if generate_new_completions:
 
 #%% merging the completions from the two models into one dataset
 
-merge_model_completions(
-    "./data/zephyr-7b-beta_completions.json",
-    "./data/mistral-7b_completions.json",
-    "./data/merged_completions.json"
-)
+merge_completions = False
+if merge_completions:
+    merge_model_completions(
+        "./data/zephyr-7b-beta_completions.json",
+        "./data/mistral-7b_completions.json",
+        "./data/merged_completions.json"
+    )
 
 #%% getting the sum of logprobs of the completions we created using the base and posttrained model
 
@@ -297,20 +299,14 @@ compute_likelihoods = True
 if compute_likelihoods:
     merged_path = "./data/merged_completions.json"
     
-    # Load merged completions
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     
     model_names = merged_data["models"]
     print(f"Models: {model_names}")
     
-    # Load both models if needed
-    # Assuming `model` is already loaded as zephyr from above
-    # Load mistral as ref_model
-    try:
-        ref_model
-    except NameError:
-        ref_model = None
+    try: ref_model
+    except NameError: ref_model = None
 
     if ref_model is None:
         print(f"{yellow}Loading reference model (mistral)...{endc}")
