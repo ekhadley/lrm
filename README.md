@@ -1,5 +1,5 @@
 # Do language models model expected rewards?
-- total time: 16 hrs
+- total time: 14 hrs
 ### Summary
 After pretraining, modern models are trained via some kind of RL using feedback datasets (winner/loser completion pairs, human likert ratings, ai ratings, etc). These teach them to produce generations that rate higher via the scoring process than the original model. Now there is also RLVR, aiming to make model's completions more likelt to satisfy some automatic grader for math/coding tasks.  
 This project was chosen to get at a broad question: What tokens do models like to see in their inputs? The idea of what tokens models 'like' to produce is a clearer concept. Over the course of posttraining, the model produces responses that it estimates will receive higher reward from the grader. We can take a particular rollout and give it to both the pre-posttraining and post-posttraining model to see how much more likely the postraining made the model to generate that response. But what does this mean when we are considering inputs? Well, assuming the model has some estimate of its expected reward 
@@ -51,3 +51,19 @@ This project was chosen to get at a broad question: What tokens do models like t
 - sweep across layers and sequence positions to see where probe is best
 
 - train the probe on the base model, mistral, and see if there's any drop in effectiveness. I'd be surprised.
+
+- figure out if the probe's estimates are correlated with the relative likelihood of the post-trained model to generate a certain completion relative to the base model. 
+    - Gather base-posttrained logprob differences for a bunch of different completions. 
+    - find the average logprob difference on the mistral's completions
+    - find the average logprob different on the zephyr's completions
+    - find the average predicted reward from the probe on mistral's completions
+    - find the average predicted reward from the probe on zephyr's completions
+    - correlate over all the completions using those from both models.
+
+- find 'divergent sequences' between the post and base model
+    - sample from the posttrained model with a logit modifier based on the base model's logit for that token. Large differences in base/post logits mean the logit is boosted during sampling.
+        - The naive implementation that I would try here would be like if the post model's logic is x% higher than the base model's, then we simply boost it again by alpha * x%. where alpha is some hparam we choose.
+    - or just sample many times and calculate logprob difference after.
+    - see what our rewawrd probe says about such sequences.
+
+

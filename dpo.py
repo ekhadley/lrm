@@ -20,6 +20,7 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 
 # Training config
 OUTPUT_DIR = "./dpo_output"
+HUB_REPO_ID = "eekay/mistral-7b-instruct-dpo"  # Hub repo to push trained model
 LEARNING_RATE = 5e-7
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
@@ -147,6 +148,7 @@ def train_dpo(
     peft_config=None,
     output_dir: str = OUTPUT_DIR,
     use_wandb: bool = True,
+    hub_repo_id: str = HUB_REPO_ID,
 ):
     """Run DPO training."""
     
@@ -206,6 +208,13 @@ def train_dpo(
     print(f"Saving model to {output_dir}")
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
+    
+    # Push to Hub
+    if hub_repo_id:
+        print(f"Pushing model to Hub: {hub_repo_id}")
+        trainer.push_to_hub(repo_id=hub_repo_id, commit_message="DPO training complete")
+        tokenizer.push_to_hub(repo_id=hub_repo_id, commit_message="Add tokenizer")
+        print(f"Model pushed to https://huggingface.co/{hub_repo_id}")
     
     if use_wandb:
         wandb.finish()
