@@ -112,7 +112,7 @@ if train_rating_probe:
     batch_size = 8
     epochs = 1
     weight_decay = 1e-4
-    target_user_prompt = False
+    target_user_prompt = True
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
 
@@ -133,7 +133,7 @@ if train_rating_probe:
         "dataset_id":dataset_id,
         "target_user_prompt":target_user_prompt,
         "weight_decay":weight_decay,
-        "note": "trained to predict from all sequence positions for every input."
+        "note": ""
     }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
@@ -175,10 +175,10 @@ if train_rating_probe:
             act = cache[probe_act_name].squeeze().to(train_dtype)
             target_act = act[target_act_seq_pos]
 
-            # probe_act = probe.forward(target_act)
-            # loss = t.abs(normalized_score - probe_act) / batch_size
-            probe_acts = einsum(probe.probe, act, "d_model, d_seq d_model -> d_seq")
-            loss = (normalized_score - probe_acts).abs().sum() / (batch_size*seq_len)
+            probe_act = probe.forward(target_act)
+            loss = t.abs(normalized_score - probe_act) / batch_size
+            # probe_acts = einsum(probe.probe, act, "d_model, d_seq d_model -> d_seq")
+            # loss = (normalized_score - probe_acts).abs().sum() / (batch_size*seq_len)
 
             loss.backward()
             
@@ -191,9 +191,8 @@ if train_rating_probe:
             with t.inference_mode():
                 probe_norm = probe.weight_norm()
                 loss = loss.detach().item() * batch_size
-                # probe_pred = round(probe_act.detach().item() * 5 + 5)
-                # pred_acc = 1 if probe_pred == score else 0
-                pred_acc = ((5*probe_acts + 5).round() == score).float().mean().item()
+                pred_acc = 1 if round(probe_act.detach().item() * 5 + 5) == score else 0
+                # pred_acc = ((5*probe_acts + 5).round() == score).float().mean().item()
                 
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f} {endc}")
@@ -207,8 +206,6 @@ if train_rating_probe:
     probe.save()
     print(f"{green}Training complete. Final checkpoint saved at step {step}. Evaluating probe...{endc}")
 
-    #%%
-    from utils import eval_probe
     scores, preds = eval_probe(model, probe, dataset, 256)
     corr = pearson(scores, preds)
     fig = px.scatter(
@@ -310,12 +307,12 @@ if test_logit_diff_amplification:
     # Note: This requires having both models loaded. If you only have one loaded above,
     # you'll need to load the other one here.
     
-    # ref_model, *_ = load_model(use_zephyr=False)
+    ref_model, *_ = load_model(use_zephyr=False)
     
     # Test prompts
     # prompt = "What's 18/3?",
-    # prompt = "How can I be more productive?",
-    prompt = "Explain quantum computing in simple terms.",
+    prompt = "How can I be more productive?",
+    # prompt = "Explain quantum computing in simple terms.",
     # prompt = "How can i murder my wife and get away with it?",
     
     # Test different alpha values
@@ -323,8 +320,9 @@ if test_logit_diff_amplification:
     
     text, ids = generate_with_logit_diff_amplification(
         user_prompt=prompt,
-        subject_model=model,  # zephyr (post-trained)
-        reference_model=ref_model,  # mistral (base)
+        subject_model=model,
+        reference_model=ref_model,
+        tokenizer=tokenizer,
         alpha=alpha,
         max_new_tokens=100,
         temperature=0.7,
