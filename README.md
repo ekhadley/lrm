@@ -1,5 +1,5 @@
 # Do language models model expected rewards?
-- total time: 14 hrs
+- total time: 15 hrs
 ### Summary
 After pretraining, modern models are trained via some kind of RL using feedback datasets (winner/loser completion pairs, human likert ratings, ai ratings, etc). These teach them to produce generations that rate higher via the scoring process than the original model. Now there is also RLVR, aiming to make model's completions more likelt to satisfy some automatic grader for math/coding tasks.  
 This project was chosen to get at a broad question: What tokens do models like to see in their inputs? The idea of what tokens models 'like' to produce is a clearer concept. Over the course of posttraining, the model produces responses that it estimates will receive higher reward from the grader. We can take a particular rollout and give it to both the pre-posttraining and post-posttraining model to see how much more likely the postraining made the model to generate that response. But what does this mean when we are considering inputs? Well, assuming the model has some estimate of its expected reward 
@@ -67,3 +67,5 @@ This project was chosen to get at a broad question: What tokens do models like t
         - The naive implementation that I would try here would be like if the post model's logic is x% higher than the base model's, then we simply boost it again by alpha * x%. where alpha is some hparam we choose.
     - or just sample many times and calculate logprob difference after.
     - see what our rewawrd probe says about such sequences.
+
+

@@ -45,6 +45,8 @@ def load_model(use_zephyr: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTran
             tokenizer=tokenizer
         )
 
+    model.requires_grad_(False)
+    t.cuda.empty_cache()
     return model, tokenizer, model_id, model_name
 
 USE_ZEPHYR = True
@@ -279,6 +281,7 @@ if generate_new_completions:
     
     t.cuda.empty_cache()
 
+#%%
 
 # merge_model_completions(
 #     "./data/zephyr-7b-beta_completions.json",
@@ -286,7 +289,83 @@ if generate_new_completions:
 #     "./data/merged_completions.json"
 # )
 
-#%%
+#%% getting the sum of logprobs of the completions we created using the base and posttrained model
+
+from utils import get_assistant_response_logprob_sum
+
+compute_likelihoods = True
+if compute_likelihoods:
+    merged_path = "./data/merged_completions.json"
+    
+    # Load merged completions
+    with open(merged_path, "r") as f:
+        merged_data = json.load(f)
+    
+    model_names = merged_data["models"]
+    print(f"Models: {model_names}")
+    
+    # Load both models if needed
+    # Assuming `model` is already loaded as zephyr from above
+    # Load mistral as ref_model
+    try:
+        ref_model
+    except NameError:
+        ref_model = None
+    if ref_model is None:
+        print(f"{yellow}Loading reference model (mistral)...{endc}")
+        ref_model, *_ = load_model(use_zephyr=False)
+        ref_model.requires_grad_(False)
+    
+    # Map model names to actual model objects
+    models = {
+        "zephyr-7b-beta": model,
+        "mistral-7b": ref_model,
+    }
+    
+    # Count how many need computing
+    n_total = len(merged_data["completions"]) * len(model_names) * len(model_names)
+    n_computed = 0
+    
+    for entry in tqdm(merged_data["completions"], desc="Computing likelihoods"):
+        prompt = entry["prompt"]
+        
+        for completion_model_name in model_names:
+            completion_data = entry["completions"][completion_model_name]
+            completion_text = completion_data["text"]
+            
+            # Extract just the assistant response from the full text
+            # The text contains the full conversation, so we need to parse out the assistant part
+            # Looking at the format, it should have the response after the assistant tag
+            
+            for scoring_model_name in model_names:
+                # Skip if already computed
+                if completion_data["likelihood"][scoring_model_name] is not None:
+                    continue
+                
+                scoring_model = models[scoring_model_name]
+                
+                # Build conversation from prompt and completion
+                # The completion_text is the full templated output, need to extract assistant response
+                # Format: <|user|>\n{prompt}</s>\n<|assistant|>\n{response}</s>
+                assistant_marker = "<|assistant|>\n"
+                assistant_start = completion_text.index(assistant_marker) + len(assistant_marker)
+                assistant_response = completion_text[assistant_start:].rstrip("</s>").strip()
+                
+                conversation = [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": assistant_response}
+                ]
+                
+                logprob_sum = get_assistant_response_logprob_sum(scoring_model, conversation)
+                completion_data["likelihood"][scoring_model_name] = logprob_sum
+                n_computed += 1
+    
+    # Save
+    with open(merged_path, "w") as f:
+        json.dump(merged_data, f, indent=2)
+    print(f"{green}Done! Computed {n_computed} likelihoods, saved to {merged_path}{endc}")
+    
+    t.cuda.empty_cache()
 
 
 

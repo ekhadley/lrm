@@ -472,8 +472,20 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
                     "idx": 0,
                     "prompt": "...",
                     "completions": {
-                        "model1_name": "generated text...",
-                        "model2_name": "generated text..."
+                        "model1_name": {
+                            "text": "generated text...",
+                            "likelihood": {
+                                "model1_name": null,
+                                "model2_name": null
+                            }
+                        },
+                        "model2_name": {
+                            "text": "generated text...",
+                            "likelihood": {
+                                "model1_name": null,
+                                "model2_name": null
+                            }
+                        }
                     }
                 },
                 ...
@@ -481,6 +493,7 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
         }
     
     Only includes examples where both models have a completion.
+    Likelihood values are initialized to null and should be filled in later.
     """
     with open(file1, "r") as f:
         data1 = json.load(f)
@@ -506,55 +519,20 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
             "idx": idx,
             "prompt": c1.get("prompt", c2.get("prompt")),
             "completions": {
-                model1_name: c1.get("new_completion", ""),
-                model2_name: c2.get("new_completion", ""),
-            }
-        })
-    
-    merged_data = {
-        "models": [model1_name, model2_name],
-        "completions": merged_completions
-    }
-    
-    with open(output_path, "w") as f:
-        json.dump(merged_data, f, indent=2)
-    
-    print(f"Merged {len(merged_completions)} completions from {model1_name} and {model2_name}")
-    print(f"(Skipped {len(completions1) + len(completions2) - 2*len(common_indices)} examples with missing completions)")
-    print(f"Saved to {output_path}")
-    
-    return merged_data
-
-
-# ======================= completion merging ========================== #
-
-def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
-    with open(file1, "r") as f:
-        data1 = json.load(f)
-    with open(file2, "r") as f:
-        data2 = json.load(f)
-    
-    model1_name = data1.get("model", "model1")
-    model2_name = data2.get("model", "model2")
-    
-    # Index completions by idx
-    completions1 = {c["idx"]: c for c in data1.get("completions", [])}
-    completions2 = {c["idx"]: c for c in data2.get("completions", [])}
-    
-    # Find common indices
-    common_indices = set(completions1.keys()) & set(completions2.keys())
-    
-    merged_completions = []
-    for idx in sorted(common_indices):
-        c1 = completions1[idx]
-        c2 = completions2[idx]
-        
-        merged_completions.append({
-            "idx": idx,
-            "prompt": c1.get("prompt", c2.get("prompt")),
-            "completions": {
-                model1_name: c1.get("new_completion", ""),
-                model2_name: c2.get("new_completion", ""),
+                model1_name: {
+                    "text": c1.get("new_completion", ""),
+                    "likelihood": {
+                        model1_name: None,
+                        model2_name: None,
+                    }
+                },
+                model2_name: {
+                    "text": c2.get("new_completion", ""),
+                    "likelihood": {
+                        model1_name: None,
+                        model2_name: None,
+                    }
+                },
             }
         })
     
@@ -652,8 +630,8 @@ def generate_with_logit_diff_amplification(
         print(f"{purple}Response:{endc} ", end="", flush=True)
     
     prev_text = ""  # For verbose streaming output
-    for step in range(max_new_tokens):
-        with t.inference_mode():
+    with t.inference_mode():
+        for step in range(max_new_tokens):
             # Get logits from both models
             subject_logits = subject_model(input_ids)[:, -1, :]  # [1, vocab_size]
             reference_logits = reference_model(input_ids)[:, -1, :]  # [1, vocab_size]
@@ -732,6 +710,76 @@ def generate_with_logit_diff_amplification(
     generated_text = tokenizer.decode(full_ids)
     
     return generated_text, generated_ids
+
+# ======================= logprob computation ========================== #
+
+def get_assistant_response_logprob_sum(
+    model: HookedTransformer,
+    conversation: list[dict],
+) -> float:
+    """
+    Compute the sum of log probabilities for the assistant response tokens.
+    
+    Args:
+        model: A HookedTransformer model with an attached tokenizer
+        conversation: A list of 2 message dicts:
+            [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+    
+    Returns:
+        The sum of log probabilities for the tokens comprising the assistant response.
+    """
+    assert len(conversation) == 2, "Expected exactly 2 messages (1 user, 1 assistant)"
+    assert conversation[0]["role"] == "user", "First message must be from user"
+    assert conversation[1]["role"] == "assistant", "Second message must be from assistant"
+    
+    tokenizer = model.tokenizer
+    device = model.cfg.device
+    
+    # Tokenize just the user message (with generation prompt) to find where assistant starts
+    user_only = [conversation[0]]
+    user_tokens = tokenizer.apply_chat_template(
+        user_only,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).squeeze()
+    prompt_len = user_tokens.shape[0]
+    
+    # Tokenize the full conversation
+    full_tokens = tokenizer.apply_chat_template(
+        conversation,
+        return_tensors="pt",
+    ).squeeze().to(device)
+    
+    seq_len = full_tokens.shape[0]
+    
+    # The assistant response tokens start at prompt_len
+    # We predict token[i] from position[i-1], so we need logits from prompt_len-1 to seq_len-2
+    # and compare against tokens from prompt_len to seq_len-1
+    
+    with t.inference_mode():
+        logits = model(full_tokens.unsqueeze(0))  # [1, seq_len, vocab_size]
+        logits = logits.squeeze(0)  # [seq_len, vocab_size]
+        
+        # Get log probabilities
+        log_probs = t.nn.functional.log_softmax(logits, dim=-1)  # [seq_len, vocab_size]
+        
+        # For each assistant token at position i, we want the log prob from position i-1
+        # Assistant tokens are at positions prompt_len, prompt_len+1, ..., seq_len-1
+        # So we gather from positions prompt_len-1, prompt_len, ..., seq_len-2
+        
+        assistant_token_ids = full_tokens[prompt_len:]  # tokens we want to score
+        prediction_positions = log_probs[prompt_len - 1 : seq_len - 1]  # logits that predict them
+        
+        # Gather the log probs for the actual tokens
+        token_log_probs = prediction_positions.gather(
+            dim=-1, 
+            index=assistant_token_ids.unsqueeze(-1)
+        ).squeeze(-1)
+        
+        total_log_prob = token_log_probs.sum().item()
+    
+    return total_log_prob
+
 
 # ======================= random stuff ========================== #
 
