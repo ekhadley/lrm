@@ -825,23 +825,6 @@ def get_assistant_response_logprob_sum(
     
     return total_log_prob
 
-
-# ======================= random stuff ========================== #
-
-asst_special_tok_ids = [523, 28766, 489, 11143, 28766, 28767] # this is how '<|assistant|>' is tokenized. :/
-def find_assistant_start(input):
-    toks = input.tolist()
-    for i in range(len(toks)):
-        if toks[i:i+len(asst_special_tok_ids)] == asst_special_tok_ids:
-            return i
-    else:
-        return -1
-
-def to_str_toks(input: str, tokenizer) -> list[int]:
-    toks = tokenizer(input)
-    str_toks = [model.tokenizer.decode()]
-    
-
 # ============================ plotting stuff ============================ #
 
 # yaxis_range = [lower, upper]

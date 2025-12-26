@@ -478,3 +478,70 @@ if test_logit_diff_amplification:
     
     # del ref_model
     # t.cuda.empty_cache()
+
+#%% visualize probe rewards vs logprob differences
+
+visualize_probe_rewards = True
+if visualize_probe_rewards:
+    import pandas as pd
+    
+    merged_path = "./data/merged_completions.json"
+    with open(merged_path, "r") as f:
+        merged_data = json.load(f)
+    
+    rows = []
+    for entry in merged_data["completions"]:
+        for source_model in merged_data["models"]:
+            completion_data = entry["completions"][source_model]
+            
+            # Get logprob sums from both models
+            zephyr_logprob = completion_data["likelihood"]["zephyr-7b-beta"]
+            mistral_logprob = completion_data["likelihood"]["mistral-7b"]
+            
+            if zephyr_logprob is None or mistral_logprob is None:
+                continue
+            
+            logprob_diff = zephyr_logprob - mistral_logprob
+            probe_reward = completion_data.get("probe_reward")
+            
+            if probe_reward is None:
+                continue
+            
+            rows.append({
+                "logprob_diff": logprob_diff,
+                "probe_reward": probe_reward,
+                "source_model": source_model,
+            })
+    
+    df = pd.DataFrame(rows)
+    
+    # Map colors: mistral (base) = red, zephyr = blue
+    color_map = {"mistral-7b": "red", "zephyr-7b-beta": "blue"}
+    
+    fig = px.scatter(
+        df,
+        x="logprob_diff",
+        y="probe_reward",
+        color="source_model",
+        color_discrete_map=color_map,
+        labels={
+            "logprob_diff": "Logprob Difference (Zephyr - Mistral)",
+            "probe_reward": "Probe Predicted Reward",
+            "source_model": "Source Model",
+        },
+        title="Probe Rewards vs Logprob Difference by Source Model",
+        template="plotly_dark",
+        height=800,
+        width=1000,
+    )
+    fig.show()
+    fig.write_html("./figures/probe_rewards_vs_logprob_difference.html")
+
+    
+    # Print statistics for each source model
+    for model_name in merged_data["models"]:
+        model_df = df[df["source_model"] == model_name]
+        print(f"\n{model_name}:")
+        print(f"  Logprob diff (zephyr - mistral): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
+        print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
+
