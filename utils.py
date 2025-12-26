@@ -448,6 +448,81 @@ def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, hs_dataset=None, ba
     
     return probe_dataset
 
+# ======================= completion merging ========================== #
+
+def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
+    """
+    Merge completions from two models into a single JSON file.
+    
+    Args:
+        file1: Path to first model's completions JSON file
+        file2: Path to second model's completions JSON file
+        output_path: Path where the merged JSON should be saved
+    
+    Returns:
+        The merged data dict
+    
+    Output format:
+        {
+            "models": ["model1_name", "model2_name"],
+            "completions": [
+                {
+                    "idx": 0,
+                    "prompt": "...",
+                    "completions": {
+                        "model1_name": "generated text...",
+                        "model2_name": "generated text..."
+                    }
+                },
+                ...
+            ]
+        }
+    
+    Only includes examples where both models have a completion.
+    """
+    with open(file1, "r") as f:
+        data1 = json.load(f)
+    with open(file2, "r") as f:
+        data2 = json.load(f)
+    
+    model1_name = data1.get("model", "model1")
+    model2_name = data2.get("model", "model2")
+    
+    # Index completions by idx
+    completions1 = {c["idx"]: c for c in data1.get("completions", [])}
+    completions2 = {c["idx"]: c for c in data2.get("completions", [])}
+    
+    # Find common indices
+    common_indices = set(completions1.keys()) & set(completions2.keys())
+    
+    merged_completions = []
+    for idx in sorted(common_indices):
+        c1 = completions1[idx]
+        c2 = completions2[idx]
+        
+        merged_completions.append({
+            "idx": idx,
+            "prompt": c1.get("prompt", c2.get("prompt")),
+            "completions": {
+                model1_name: c1.get("new_completion", ""),
+                model2_name: c2.get("new_completion", ""),
+            }
+        })
+    
+    merged_data = {
+        "models": [model1_name, model2_name],
+        "completions": merged_completions
+    }
+    
+    with open(output_path, "w") as f:
+        json.dump(merged_data, f, indent=2)
+    
+    print(f"Merged {len(merged_completions)} completions from {model1_name} and {model2_name}")
+    print(f"(Skipped {len(completions1) + len(completions2) - 2*len(common_indices)} examples with missing completions)")
+    print(f"Saved to {output_path}")
+    
+    return merged_data
+
 # ======================= random stuff ========================== #
 
 asst_special_tok_ids = [523, 28766, 489, 11143, 28766, 28767] # this is how '<|assistant|>' is tokenized. :/

@@ -292,6 +292,14 @@ if generate_new_completions:
 
 #%%
 
+merge_model_completions(
+    "./data/zephyr-7b-beta_completions.json",
+    "./data/mistral-7b_completions.json",
+    "./data/merged_completions.json"
+)
+
+#%%
+
 eval_posttrained_model_probe_reward = True
 if eval_posttrained_model_probe_reward:
     dataset_id = "eekay/ultrafeedback-balanced"
