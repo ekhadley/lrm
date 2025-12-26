@@ -644,6 +644,13 @@ def generate_with_logit_diff_amplification(
         if len(tok_ids) == 1:
             stop_token_ids.add(tok_ids[0])
     
+    if verbose:
+        print(f"\n{cyan}{'='*60}{endc}")
+        print(f"{yellow}Alpha: {alpha}{endc}")
+        print(f"{cyan}{'='*60}{endc}")
+        print(f"{green}Prompt:{endc} '{user_prompt}'")
+        print(f"{purple}Response:{endc} ", end="", flush=True)
+    
     prev_text = ""  # For verbose streaming output
     for step in range(max_new_tokens):
         with t.inference_mode():
@@ -715,7 +722,7 @@ def generate_with_logit_diff_amplification(
             input_ids = t.cat([input_ids, next_token], dim=1)
     
     if verbose:
-        print()  # Newline after generation
+        print(f"\n{gray}[Generated {len(generated_ids)} tokens]{endc}")
     
     # Decode full response
     full_ids = t.cat([
