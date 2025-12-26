@@ -578,6 +578,7 @@ def generate_with_logit_diff_amplification(
     user_prompt: str,
     subject_model: HookedTransformer,
     reference_model: HookedTransformer,
+    tokenizer: AutoTokenizer | None = None,
     alpha: float = 1.0,
     max_new_tokens: int = 100,
     temperature: float = 1.0,
@@ -600,6 +601,7 @@ def generate_with_logit_diff_amplification(
         user_prompt: The user's input prompt
         subject_model: The model to sample from (typically post-trained, e.g. zephyr)
         reference_model: The reference model (typically base, e.g. mistral)
+        tokenizer: The tokenizer to use. If None, uses subject_model.tokenizer
         alpha: Amplification factor for logit differences. 
                alpha=0 means no amplification (just subject model).
                alpha>0 amplifies divergence from reference.
@@ -615,7 +617,8 @@ def generate_with_logit_diff_amplification(
         Tuple of (generated_text, generated_token_ids)
     """
     device = subject_model.cfg.device
-    tokenizer = subject_model.tokenizer
+    if tokenizer is None:
+        tokenizer = subject_model.tokenizer
     
     # Format prompt using chat template
     messages = [{"role": "user", "content": user_prompt}]
