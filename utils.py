@@ -452,7 +452,13 @@ def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, hs_dataset=None, ba
 
 # ======================= completion merging ========================== #
 
-def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
+def merge_model_completions(
+    file1: str,
+    file2: str,
+    output_path: str,
+    tokenizer: AutoTokenizer | None = None,
+    max_seq_len: int = 2048,
+) -> dict:
     """
     Merge completions from two models into a single JSON file.
     
@@ -460,6 +466,8 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
         file1: Path to first model's completions JSON file
         file2: Path to second model's completions JSON file
         output_path: Path where the merged JSON should be saved
+        tokenizer: If provided, filter out completions that exceed max_seq_len when tokenized
+        max_seq_len: Maximum sequence length (default 2048)
     
     Returns:
         The merged data dict
@@ -513,16 +521,29 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
     common_indices = set(completions1.keys()) & set(completions2.keys())
     
     merged_completions = []
+    n_skipped_too_long = 0
+    
     for idx in sorted(common_indices):
         c1 = completions1[idx]
         c2 = completions2[idx]
+        
+        text1 = c1.get("new_completion", "")
+        text2 = c2.get("new_completion", "")
+        
+        # Filter by token length if tokenizer provided
+        if tokenizer is not None:
+            len1 = len(tokenizer.encode(text1))
+            len2 = len(tokenizer.encode(text2))
+            if len1 >= max_seq_len or len2 >= max_seq_len:
+                n_skipped_too_long += 1
+                continue
         
         merged_completions.append({
             "idx": idx,
             "prompt": c1.get("prompt", c2.get("prompt")),
             "completions": {
                 model1_name: {
-                    "text": c1.get("new_completion", ""),
+                    "text": text1,
                     "likelihood": {
                         model1_name: None,
                         model2_name: None,
@@ -530,7 +551,7 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
                     "probe_reward": None,
                 },
                 model2_name: {
-                    "text": c2.get("new_completion", ""),
+                    "text": text2,
                     "likelihood": {
                         model1_name: None,
                         model2_name: None,
@@ -549,7 +570,11 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
         json.dump(merged_data, f, indent=2)
     
     print(f"Merged {len(merged_completions)} completions from {model1_name} and {model2_name}")
-    print(f"(Skipped {len(completions1) + len(completions2) - 2*len(common_indices)} examples with missing completions)")
+    n_missing = len(completions1) + len(completions2) - 2*len(common_indices)
+    if n_missing > 0:
+        print(f"(Skipped {n_missing} examples with missing completions)")
+    if n_skipped_too_long > 0:
+        print(f"(Skipped {n_skipped_too_long} examples exceeding {max_seq_len} tokens)")
     print(f"Saved to {output_path}")
     
     return merged_data

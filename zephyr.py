@@ -283,12 +283,14 @@ if generate_new_completions:
 
 #%% merging the completions from the two models into one dataset
 
-merge_completions = False
+merge_completions = True
 if merge_completions:
     merge_model_completions(
         "./data/zephyr-7b-beta_completions.json",
         "./data/mistral-7b_completions.json",
-        "./data/merged_completions.json"
+        "./data/merged_completions.json",
+        tokenizer=tokenizer,
+        max_seq_len=2048
     )
 
 #%% getting the sum of logprobs of the completions we created using the base and posttrained model
