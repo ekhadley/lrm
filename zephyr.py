@@ -8,42 +8,47 @@ DTYPE = t.bfloat16
 
 #%% loading zephyr into mistral 7b the base model
 
+def load_model(use_zephyr: bool) -> tuple[HookedTransformer, AutoTokenizer]:
+    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
+    if use_zephyr:
+        MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
+        MODEL_NAME = MODEL_ID.split("/")[-1]
+        PARENT_MODEL_ID = "mistral-7b"
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=DTYPE,
+            device_map=DEVICE
+        )
+
+        model = HookedTransformer.from_pretrained(
+            PARENT_MODEL_ID,
+            hf_model=hf_model,
+            device=DEVICE,
+            dtype=DTYPE,
+            fold_ln=False,
+            center_writing_weights=False,
+            center_unembed=False,
+            tokenizer=tokenizer
+        )
+        del hf_model
+
+    else:
+        MODEL_ID = "mistral-7b"
+        MODEL_NAME = MODEL_ID
+        model = HookedTransformer.from_pretrained(
+            MODEL_ID,
+            device=DEVICE,
+            dtype=DTYPE,
+            fold_ln=False,
+            center_writing_weights=False,
+            center_unembed=False,
+            tokenizer=tokenizer
+        )
+
+    return model, tokenizer
+
 USE_ZEPHYR = True
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
-if USE_ZEPHYR:
-    MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
-    MODEL_NAME = MODEL_ID.split("/")[-1]
-    PARENT_MODEL_ID = "mistral-7b"
-    hf_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        torch_dtype=DTYPE,
-        device_map=DEVICE
-    )
-
-    model = HookedTransformer.from_pretrained(
-        PARENT_MODEL_ID,
-        hf_model=hf_model,
-        device=DEVICE,
-        dtype=DTYPE,
-        fold_ln=False,
-        center_writing_weights=False,
-        center_unembed=False,
-        tokenizer=tokenizer
-    )
-    del hf_model
-
-else:
-    MODEL_ID = "mistral-7b"
-    MODEL_NAME = MODEL_ID
-    model = HookedTransformer.from_pretrained(
-        MODEL_ID,
-        device=DEVICE,
-        dtype=DTYPE,
-        fold_ln=False,
-        center_writing_weights=False,
-        center_unembed=False,
-        tokenizer=tokenizer
-    )
+model, tokenizer = load_model(USE_ZEPHYR)
 
 model.requires_grad_(False)
 t.cuda.empty_cache()
@@ -96,11 +101,12 @@ if generate_probe_dataset:
     
 #%%
 
-from utils import LinearProbe, NonLinearProbe
+from utils import LinearProbe, NonLinearProbe, eval_probe
 
-train_rating_probe = False
+train_rating_probe = True
 if train_rating_probe:
     probe_layer = 24
+    # for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
     lr = 1e-4
     batch_size = 8
@@ -111,7 +117,7 @@ if train_rating_probe:
     save_every_steps = 500  # Save checkpoint every N steps
 
     dataset = datasets.load_dataset(dataset_id, split="train")
-    train_dtype = t.float33
+    train_dtype = t.float32
     probe = LinearProbe(model, probe_layer, probe_act_name)
     # probe = NonLinearProbe(model, probe_layer, probe_act_name)
     print(f"{green}Probe name: {probe.hash_name}{endc}")
@@ -127,7 +133,7 @@ if train_rating_probe:
         "dataset_id":dataset_id,
         "target_user_prompt":target_user_prompt,
         "weight_decay":weight_decay,
-        "note": "probe trained on a random sequence position within the assistant's response"
+        "note": "trained to predict from all sequence positions for every input."
     }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
@@ -156,10 +162,10 @@ if train_rating_probe:
                 target_act_seq_pos = -1
             
             # target_act_seq_pos = (user_prompt_len + seq_len) // 2
-            target_act_seq_pos = random.randint(user_prompt_len + 1, seq_len - 1)
+            # target_act_seq_pos = random.randint(user_prompt_len + 1, seq_len - 1)
 
             score = ex["score"]
-            normalized_score = (score / 10.0)
+            normalized_score = (score - 5.0) /  5.0
 
             _, cache = model.run_with_cache(
                 conversation_toks,
@@ -169,21 +175,25 @@ if train_rating_probe:
             act = cache[probe_act_name].squeeze().to(train_dtype)
             target_act = act[target_act_seq_pos]
 
-            probe_act = probe.forward(target_act)
+            # probe_act = probe.forward(target_act)
             # loss = t.abs(normalized_score - probe_act) / batch_size
-            loss = t.abs(normalized_score - probe_act) / batch_size
+            probe_acts = einsum(probe.probe, act, "d_model, d_seq d_model -> d_seq")
+            loss = (normalized_score - probe_acts).abs().sum() / (batch_size*seq_len)
+
             loss.backward()
             
             if (step+1) % batch_size == 0:
                 grad_norm = probe.grad_norm()
                 opt.step()
                 opt.zero_grad()
+                t.cuda.empty_cache()
 
             with t.inference_mode():
                 probe_norm = probe.weight_norm()
                 loss = loss.detach().item() * batch_size
-                probe_pred = round(probe_act.detach().item() * 10)
-                pred_acc = 1 if probe_pred == score else 0
+                # probe_pred = round(probe_act.detach().item() * 5 + 5)
+                # pred_acc = 1 if probe_pred == score else 0
+                pred_acc = (((probe_acts*5 + 5) - normalized_score).abs() <= 0.5 ).float().mean().item()
                 wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
                 bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc}, grad norm: {grad_norm:.3f} {endc}")
 
@@ -191,33 +201,25 @@ if train_rating_probe:
                 probe.save()
 
             step += 1
-            
-            t.cuda.empty_cache()
-
-    
-    probe.save()
-    print(f"{green}Training complete. Final checkpoint saved at step {step}{endc}")
     
     wandb.finish()
-    t.cuda.empty_cache()
+    probe.save()
+    print(f"{green}Training complete. Final checkpoint saved at step {step}. Evaluating probe...{endc}")
 
-#%%
-
-from utils import eval_probe
-
-eval_trained_probe = False
-if eval_trained_probe:
-    probe = LinearProbe.load(model, "efad62c7a0bc")
-    # probe = NonLinearProbe.load(model, "0c8d9e05dd39")
+    #%%
+    from utils import eval_probe
     scores, preds = eval_probe(model, probe, dataset, 256)
     corr = pearson(scores, preds)
-    px.scatter(
+    fig = px.scatter(
         x=scores,
         y=preds,
         labels={"x":"True Score", "y":"Probe Prediction"},
         title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
         range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
     )
+    fig.show()
+    
+    t.cuda.empty_cache()
 
 #%% generate completions from the post-trained model
 
@@ -300,45 +302,65 @@ merge_model_completions(
 
 #%%
 
-eval_posttrained_model_probe_reward = True
-if eval_posttrained_model_probe_reward:
-    dataset_id = "eekay/ultrafeedback-balanced"
-    probe = LinearProbe.load(model, "1340f0f97c78")
-    target_act_seq_pos = -3
+from utils import generate_with_logit_diff_amplification
 
-    dataset = datasets.load_dataset(dataset_id, split="train")
-    train_dtype = t.float32
-
-    for ex in (bar:=tqdm(dataset)):
-        user_prompt_toks = model.tokenizer.apply_chat_template(
-            [{"role":"user","content": ex["prompt"]}],
-            return_tensors="pt",
-            add_generation_prompt=True,
-        ).to(DEVICE)
-        user_prompt_len = user_prompt_toks.shape[-1]
-
-        response_toks = model.generate(
-            user_prompt_toks,
-            do_sample=True,
-            verbose=False,
-            max_new_tokens=500
-        ).squeeze()
-        print(model.tokenizer.decode(response_toks))
-
-        # Get probe's reward estimate for the generated completion
-        with t.inference_mode():
-            _, cache = model.run_with_cache(
-                response_toks,
-                stop_at_layer=probe.layer + 1,
-                names_filter=[probe.act_name]
-            )
-            act = cache[probe.act_name].squeeze().to(train_dtype)
-            target_act = act[target_act_seq_pos]
-            
-            probe_pred = probe.get_pred(target_act)
-            
-            bar.set_description(f"{purple}Probe prediction: {probe_pred:.2f}{endc}")
-
-        break
-
+test_logit_diff_amplification = False
+if test_logit_diff_amplification:
+    # Load both models - zephyr (subject/post-trained) and mistral (reference/base)
+    # Note: This requires having both models loaded. If you only have one loaded above,
+    # you'll need to load the other one here.
+    
+    # Load the base mistral model as reference
+    mistral_hf = AutoModelForCausalLM.from_pretrained(
+        "mistralai/Mistral-7B-v0.1",
+        torch_dtype=DTYPE,
+        device_map=DEVICE
+    )
+    mistral_model = HookedTransformer.from_pretrained(
+        "mistral-7b",
+        hf_model=mistral_hf,
+        device=DEVICE,
+        dtype=DTYPE,
+        fold_ln=False,
+        center_writing_weights=False,
+        center_unembed=False,
+        tokenizer=tokenizer
+    )
+    mistral_model.requires_grad_(False)
+    del mistral_hf
     t.cuda.empty_cache()
+    
+    # Test prompts
+    test_prompts = [
+        "What's 18/3?",
+        "How can I be more productive?",
+        "Explain quantum computing in simple terms.",
+    ]
+    
+    # Test different alpha values
+    alphas = [0.0, 0.5, 1.0, 2.0]
+    
+    for prompt in test_prompts:
+        print(f"\n{cyan}{'='*60}{endc}")
+        print(f"{cyan}Prompt: {prompt}{endc}")
+        print(f"{cyan}{'='*60}{endc}")
+        
+        for alpha in alphas:
+            print(f"\n{yellow}Alpha = {alpha}:{endc}")
+            text, ids = generate_with_logit_diff_amplification(
+                user_prompt=prompt,
+                subject_model=model,  # zephyr (post-trained)
+                reference_model=mistral_model,  # mistral (base)
+                alpha=alpha,
+                max_new_tokens=100,
+                temperature=0.7,
+                top_p=0.9,
+                verbose=True,
+            )
+            print(f"{gray}[Generated {len(ids)} tokens]{endc}")
+        
+        t.cuda.empty_cache()
+    
+    # Clean up reference model if you need the memory
+    # del mistral_model
+    # t.cuda.empty_cache()

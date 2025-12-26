@@ -12,6 +12,8 @@ from IPython import get_ipython
 import functools
 from tabulate import tabulate
 import wandb
+import einops
+from einops import einsum
 
 import torch as t
 from torch import Tensor
@@ -98,7 +100,7 @@ class LinearProbe:
         return self.probe @ act
     
     def get_pred(self, act: Tensor) -> Tensor:
-        probe_pred = self.forward(act).item() * 10
+        probe_pred = self.forward(act).item() * 5 + 5
         return probe_pred
     
     def save(self):
@@ -239,11 +241,11 @@ def eval_probe(model, probe: LinearProbe, dataset, n_samples):
             act = cache[probe.act_name].squeeze().to(probe.dtype)
             target_act = act[-1]
             
-            # probe_pred = probe.get_pred(target_act)
             probe_act = probe.forward(target_act).item()
+            probe_pred = probe_act*5 + 5
         
         true_scores.append(score)
-        pred_scores.append(probe_act*10)
+        pred_scores.append(probe_pred)
 
     t.cuda.empty_cache()
     return true_scores, pred_scores
@@ -522,6 +524,191 @@ def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
     print(f"Saved to {output_path}")
     
     return merged_data
+
+
+# ======================= completion merging ========================== #
+
+def merge_model_completions(file1: str, file2: str, output_path: str) -> dict:
+    with open(file1, "r") as f:
+        data1 = json.load(f)
+    with open(file2, "r") as f:
+        data2 = json.load(f)
+    
+    model1_name = data1.get("model", "model1")
+    model2_name = data2.get("model", "model2")
+    
+    # Index completions by idx
+    completions1 = {c["idx"]: c for c in data1.get("completions", [])}
+    completions2 = {c["idx"]: c for c in data2.get("completions", [])}
+    
+    # Find common indices
+    common_indices = set(completions1.keys()) & set(completions2.keys())
+    
+    merged_completions = []
+    for idx in sorted(common_indices):
+        c1 = completions1[idx]
+        c2 = completions2[idx]
+        
+        merged_completions.append({
+            "idx": idx,
+            "prompt": c1.get("prompt", c2.get("prompt")),
+            "completions": {
+                model1_name: c1.get("new_completion", ""),
+                model2_name: c2.get("new_completion", ""),
+            }
+        })
+    
+    merged_data = {
+        "models": [model1_name, model2_name],
+        "completions": merged_completions
+    }
+    
+    with open(output_path, "w") as f:
+        json.dump(merged_data, f, indent=2)
+    
+    print(f"Merged {len(merged_completions)} completions from {model1_name} and {model2_name}")
+    print(f"(Skipped {len(completions1) + len(completions2) - 2*len(common_indices)} examples with missing completions)")
+    print(f"Saved to {output_path}")
+    
+    return merged_data
+
+# ======================= logit diff amplification ========================== #
+
+def generate_with_logit_diff_amplification(
+    user_prompt: str,
+    subject_model: HookedTransformer,
+    reference_model: HookedTransformer,
+    alpha: float = 1.0,
+    max_new_tokens: int = 100,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    stop_at_eos: bool = True,
+    verbose: bool = False,
+) -> tuple[str, list[int]]:
+    """
+    Generate completions by amplifying logit differences between subject and reference models.
+    
+    The idea: if the subject (post-trained) model's logit for a token is higher than the 
+    reference (base) model's, we boost it even more. This amplifies the "divergent" behavior
+    learned during post-training.
+    
+    Modified logits = subject_logits + alpha * (subject_logits - reference_logits)
+                    = (1 + alpha) * subject_logits - alpha * reference_logits
+    
+    Args:
+        user_prompt: The user's input prompt
+        subject_model: The model to sample from (typically post-trained, e.g. zephyr)
+        reference_model: The reference model (typically base, e.g. mistral)
+        alpha: Amplification factor for logit differences. 
+               alpha=0 means no amplification (just subject model).
+               alpha>0 amplifies divergence from reference.
+               alpha<0 would make subject more like reference.
+        max_new_tokens: Maximum number of tokens to generate
+        temperature: Sampling temperature (applied after amplification)
+        top_k: If set, only sample from top k tokens
+        top_p: If set, use nucleus sampling with this threshold
+        stop_at_eos: Whether to stop generation at EOS token
+        verbose: Print tokens as they're generated
+        
+    Returns:
+        Tuple of (generated_text, generated_token_ids)
+    """
+    device = subject_model.cfg.device
+    tokenizer = subject_model.tokenizer
+    
+    # Format prompt using chat template
+    messages = [{"role": "user", "content": user_prompt}]
+    input_ids = tokenizer.apply_chat_template(
+        messages,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).to(device)
+    
+    prompt_len = input_ids.shape[1]
+    generated_ids = []
+    
+    # Get EOS token id
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        eos_token_id = tokenizer.pad_token_id
+    
+    for step in range(max_new_tokens):
+        with t.inference_mode():
+            # Get logits from both models
+            subject_logits = subject_model(input_ids)[:, -1, :]  # [1, vocab_size]
+            reference_logits = reference_model(input_ids)[:, -1, :]  # [1, vocab_size]
+            
+            # Compute amplified logits
+            # modified = subject + alpha * (subject - reference)
+            #          = (1 + alpha) * subject - alpha * reference
+            logit_diff = subject_logits - reference_logits
+            modified_logits = subject_logits + alpha * logit_diff
+            
+            # Apply temperature
+            if temperature != 1.0:
+                modified_logits = modified_logits / temperature
+            
+            # Apply top-k filtering
+            if top_k is not None:
+                top_k_values, _ = t.topk(modified_logits, top_k, dim=-1)
+                threshold = top_k_values[:, -1].unsqueeze(-1)
+                modified_logits = t.where(
+                    modified_logits < threshold,
+                    t.full_like(modified_logits, float('-inf')),
+                    modified_logits
+                )
+            
+            # Apply top-p (nucleus) filtering
+            if top_p is not None:
+                sorted_logits, sorted_indices = t.sort(modified_logits, descending=True, dim=-1)
+                cumulative_probs = t.cumsum(t.softmax(sorted_logits, dim=-1), dim=-1)
+                
+                # Remove tokens with cumulative probability above threshold
+                sorted_indices_to_remove = cumulative_probs > top_p
+                # Shift to keep first token above threshold
+                sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+                sorted_indices_to_remove[:, 0] = False
+                
+                # Scatter back to original indices
+                indices_to_remove = sorted_indices_to_remove.scatter(
+                    dim=-1, index=sorted_indices, src=sorted_indices_to_remove
+                )
+                modified_logits = t.where(
+                    indices_to_remove,
+                    t.full_like(modified_logits, float('-inf')),
+                    modified_logits
+                )
+            
+            # Sample from the distribution
+            probs = t.softmax(modified_logits, dim=-1)
+            next_token = t.multinomial(probs, num_samples=1)
+            
+            next_token_id = next_token.item()
+            generated_ids.append(next_token_id)
+            
+            if verbose:
+                token_str = tokenizer.decode([next_token_id])
+                print(token_str, end="", flush=True)
+            
+            # Check for EOS
+            if stop_at_eos and next_token_id == eos_token_id:
+                break
+            
+            # Append to input for next iteration
+            input_ids = t.cat([input_ids, next_token], dim=1)
+    
+    if verbose:
+        print()  # Newline after generation
+    
+    # Decode full response
+    full_ids = t.cat([
+        input_ids[:, :prompt_len].squeeze(),
+        t.tensor(generated_ids, device=device)
+    ])
+    generated_text = tokenizer.decode(full_ids)
+    
+    return generated_text, generated_ids
 
 # ======================= random stuff ========================== #
 
