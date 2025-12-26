@@ -149,36 +149,30 @@ if train_rating_probe:
                 seq_len = conversation_toks.shape[0]
                 if seq_len >= model.cfg.n_ctx: continue
 
-                user_prompt_toks = model.tokenizer.apply_chat_template(
-                    [{"role":"user","content": ex["prompt"]}],
-                    add_generation_prompt=True,
-                )
-                user_prompt_len = len(user_prompt_toks)
-                assistant_response_len = seq_len - user_prompt_len
-                
-                if target_user_prompt: # if we are training the probe on just the 
+                if target_user_prompt:
+                    # Find user prompt end by tokenizing just the user message
+                    user_prompt_toks = model.tokenizer.apply_chat_template(
+                        [{"role":"user","content": ex["prompt"]}],
+                        add_generation_prompt=True,
+                    )
                     target_act_seq_pos = len(user_prompt_toks) - 1
                 else:
                     target_act_seq_pos = -1
-                
-                # target_act_seq_pos = (user_prompt_len + seq_len) // 2
-                # target_act_seq_pos = random.randint(user_prompt_len + 1, seq_len - 1)
 
                 score = ex["score"]
-                normalized_score = (score - 5.0) /  5.0
+                normalized_score = (score - 5.0) / 5.0
 
                 _, cache = model.run_with_cache(
                     conversation_toks,
-                    stop_at_layer = probe_layer+1,
+                    stop_at_layer=probe_layer + 1,
                     names_filter=[probe_act_name]
                 )
-                act = cache[probe_act_name].squeeze().to(train_dtype)
-                target_act = act[target_act_seq_pos]
+                # Extract target position first, then cast dtype (saves memory)
+                target_act = cache[probe_act_name].squeeze()[target_act_seq_pos].to(train_dtype)
+                del cache
 
                 probe_act = probe.forward(target_act)
                 loss = t.abs(normalized_score - probe_act) / batch_size
-                # probe_acts = einsum(probe.probe, act, "d_model, d_seq d_model -> d_seq")
-                # loss = (normalized_score - probe_acts).abs().sum() / (batch_size*seq_len)
 
                 loss.backward()
                 
@@ -186,16 +180,14 @@ if train_rating_probe:
                     grad_norm = probe.grad_norm()
                     opt.step()
                     opt.zero_grad()
-                    t.cuda.empty_cache()
 
                 with t.inference_mode():
                     probe_norm = probe.weight_norm()
-                    loss = loss.detach().item() * batch_size
-                    pred_acc = 1 if round(probe_act.detach().item() * 5 + 5) == score else 0
-                    # pred_acc = ((5*probe_acts + 5).round() == score).float().mean().item()
+                    loss_val = loss.item() * batch_size
+                    pred_acc = 1 if round(probe_act.item() * 5 + 5) == score else 0
                     
-                    wandb.log({"loss":loss, "norm": probe_norm,  "acc":pred_acc})
-                    bar.set_description(f"{orange}[{e}] loss: {loss:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f} {endc}")
+                    wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc})
+                    bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}{endc}")
 
                 if (step + 1) % save_every_steps == 0:
                     probe.save()
