@@ -329,7 +329,6 @@ if test_logit_diff_amplification:
         top_p=0.9,
         verbose=True,
     )
-    print(f"{gray}[Generated {len(ids)} tokens]{endc}")
         
     t.cuda.empty_cache()
     
