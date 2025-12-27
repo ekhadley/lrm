@@ -250,13 +250,14 @@ if generate_new_completions:
             completion_len = prompt_completion_len - user_prompt_len
             if prompt_completion_len >= max_seq_len - 1: continue # if we hit the end of context before the model ending the completion naturally, toss it
 
-            response_text = model.tokenizer.decode(response_toks)
+            # Extract just the completion tokens (exclude prompt) and decode without special tokens
+            completion_only_toks = response_toks[user_prompt_len:]
+            completion_text = model.tokenizer.decode(completion_only_toks, skip_special_tokens=True)
             
             completions[idx] = {
                 "idx": idx,
                 **dict(ex),
-                "new_completion": response_text,
-                "completion_ids": response_toks.tolist(),
+                "completion": completion_text,
             }
 
             bar.set_description(f"{lime}[{len(completions)}/{n_target_completions}] generated {user_prompt_len}+{completion_len} toks{endc}")
@@ -317,18 +318,14 @@ if compute_likelihoods:
     # Count how many need computing
     n_total = len(merged_data["completions"]) * len(model_names) * len(model_names)
     n_computed = 0
-    assistant_marker = "<|assistant|>\n"
     
     for entry in tqdm(merged_data["completions"], desc="Computing likelihoods"):
         prompt = entry["prompt"]
         
         for completion_model_name in model_names:
             completion_data = entry["completions"][completion_model_name]
-            completion_text = completion_data["text"]
-            
-            # Extract just the assistant response from the full text
-            # The text contains the full conversation, so we need to parse out the assistant part
-            # Looking at the format, it should have the response after the assistant tag
+            # text field now contains just the model's response (no special tokens)
+            assistant_response = completion_data["text"]
             
             for scoring_model_name in model_names:
                 # Skip if already computed
@@ -336,12 +333,6 @@ if compute_likelihoods:
                     continue
                 
                 scoring_model = models[scoring_model_name]
-                
-                # Build conversation from prompt and completion
-                # The completion_text is the full templated output, need to extract assistant response
-                # Format: <|user|>\n{prompt}</s>\n<|assistant|>\n{response}</s>
-                assistant_start = completion_text.index(assistant_marker) + len(assistant_marker)
-                assistant_response = completion_text[assistant_start:].rstrip("</s>").strip()
                 
                 conversation = [
                     {"role": "user", "content": prompt},
@@ -378,7 +369,6 @@ if compute_probe_rewards:
     print(f"Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name})")
 
     
-    assistant_marker = "<|assistant|>\n"
     n_computed = 0
     for entry in tqdm(merged_data["completions"], desc="Computing probe rewards"):
         prompt = entry["prompt"]
@@ -390,11 +380,8 @@ if compute_probe_rewards:
             if completion_data.get("probe_reward") is not None:
                 continue
             
-            completion_text = completion_data["text"]
-            
-            # Extract assistant response
-            assistant_start = completion_text.index(assistant_marker) + len(assistant_marker)
-            assistant_response = completion_text[assistant_start:].rstrip("</s>").strip()
+            # text field now contains just the model's response (no special tokens)
+            assistant_response = completion_data["text"]
             
             # Build conversation and tokenize
             messages = [
@@ -560,7 +547,6 @@ if show_top_k_prompts:
     from utils import red, blue, cyan, endc
     
     k = 10
-    assistant_marker = "<|assistant|>\n"
     
     merged_path = "./data/merged_completions.json"
     with open(merged_path, "r") as f:
@@ -578,15 +564,9 @@ if show_top_k_prompts:
         if mistral_dpo_reward is None or mistral_reward is None:
             continue
         
-        # Extract assistant responses from full text
-        mistral_dpo_text = mistral_dpo_data.get("text", "")
-        mistral_text = mistral_data.get("text", "")
-        
-        try:
-            mistral_dpo_response = mistral_dpo_text[mistral_dpo_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
-            mistral_response = mistral_text[mistral_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
-        except ValueError:
-            continue
+        # text field now contains just the model's response (no special tokens)
+        mistral_dpo_response = mistral_dpo_data.get("text", "")
+        mistral_response = mistral_data.get("text", "")
         
         reward_diff = mistral_dpo_reward - mistral_reward
         prompt_diffs.append({

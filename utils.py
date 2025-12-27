@@ -472,6 +472,10 @@ def merge_model_completions(
     Returns:
         The merged data dict
     
+    Input format (per-model completions file):
+        Each completion should have a "completion" field containing just the model's
+        response text (no special tokens or chat template markup).
+    
     Output format:
         {
             "models": ["model1_name", "model2_name"],
@@ -481,21 +485,14 @@ def merge_model_completions(
                     "prompt": "...",
                     "completions": {
                         "model1_name": {
-                            "text": "generated text...",
+                            "text": "assistant response only...",
                             "likelihood": {
                                 "model1_name": null,
                                 "model2_name": null
                             },
                             "probe_reward": null
                         },
-                        "model2_name": {
-                            "text": "generated text...",
-                            "likelihood": {
-                                "model1_name": null,
-                                "model2_name": null
-                            },
-                            "probe_reward": null
-                        }
+                        "model2_name": {...}
                     }
                 },
                 ...
@@ -527,27 +524,17 @@ def merge_model_completions(
         c1 = completions1[idx]
         c2 = completions2[idx]
         
-        text1 = c1.get("new_completion", "")
-        text2 = c2.get("new_completion", "")
+        # completion field contains just the model's response text (no special tokens)
+        text1 = c1.get("completion", "")
+        text2 = c2.get("completion", "")
         prompt = c1.get("prompt", c2.get("prompt"))
         
         # Filter by token length if tokenizer provided
-        # We need to check the length of the full templated conversation
         if tokenizer is not None:
-            assistant_marker = "<|assistant|>\n"
-            
-            # Extract assistant response from text1 and check length
-            assistant_start = text1.index(assistant_marker) + len(assistant_marker)
-            assistant_response1 = text1[assistant_start:].rstrip("</s>").strip()
-            
-            conv1 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_response1}]
+            conv1 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": text1}]
             len1 = len(tokenizer.apply_chat_template(conv1))
             
-            # Extract assistant response from text2 and check length  
-            assistant_start = text2.index(assistant_marker) + len(assistant_marker)
-            assistant_response2 = text2[assistant_start:].rstrip("</s>").strip()
-                
-            conv2 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_response2}]
+            conv2 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": text2}]
             len2 = len(tokenizer.apply_chat_template(conv2))
             
             if len1 >= max_seq_len or len2 >= max_seq_len:
