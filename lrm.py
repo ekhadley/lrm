@@ -109,6 +109,10 @@ if train_rating_probe:
     print(f"{green}Probe name: {probe.hash_name}{endc}")
 
     opt = t.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99))
+    
+    # Learning rate scheduler - cosine annealing over total training steps
+    total_steps = (len(dataset) * epochs) // batch_size
+    scheduler = t.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps, eta_min=lr * 0.1)
 
     run_cfg = {
         "lr":lr,
@@ -164,15 +168,17 @@ if train_rating_probe:
             if (step+1) % batch_size == 0:
                 grad_norm = probe.grad_norm()
                 opt.step()
+                scheduler.step()
                 opt.zero_grad()
 
             with t.inference_mode():
                 probe_norm = probe.weight_norm()
                 loss_val = loss.item() * batch_size
                 pred_acc = 1 if round(probe_act.item() * 5 + 5) == score else 0
+                current_lr = scheduler.get_last_lr()[0]
                 
-                wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc})
-                bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}{endc}")
+                wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc, "lr": current_lr})
+                bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}, lr: {current_lr:.2e}{endc}")
 
             if (step + 1) % save_every_steps == 0:
                 probe.save()
