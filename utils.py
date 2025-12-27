@@ -622,7 +622,7 @@ def generate_with_logit_diff_amplification(
     
     Args:
         user_prompt: The user's input prompt
-        subject_model: The model to sample from (typically post-trained, e.g. zephyr)
+        subject_model: The model to sample from (typically post-trained, e.g. mistral dpo)
         reference_model: The reference model (typically base, e.g. mistral)
         tokenizer: The tokenizer to use. If None, uses subject_model.tokenizer
         alpha: Amplification factor for logit differences. 
@@ -660,7 +660,7 @@ def generate_with_logit_diff_amplification(
         stop_token_ids.add(tokenizer.eos_token_id)
     if tokenizer.pad_token_id is not None:
         stop_token_ids.add(tokenizer.pad_token_id)
-    # Also check for </s> token explicitly (common in mistral/zephyr)
+    # Also check for </s> token explicitly (common in mistral)
     eos_tokens_to_check = ["</s>", "<|endoftext|>", "<|end|>"]
     for tok_str in eos_tokens_to_check:
         tok_ids = tokenizer.encode(tok_str, add_special_tokens=False)

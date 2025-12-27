@@ -9,38 +9,34 @@ DTYPE = t.bfloat16
 #%% loading one of the 2 models
 
 def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
-    parent_model_id = "mistralai/Mistral-7B-Instruct-v0.1"
     if use_base:
+        model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+        model_name = "mistral"
         model = HookedTransformer.from_pretrained_no_processing(
-            parent_model_id,
+            model_id,
             device=device,
             dtype=dtype,
         )
 
     else:
-        model_id = "mistral-7b"
-        hf_model = AutoModelForCausalLM.from_pretrained(parent_model_id, torch_dtype=dtype, device_map=device)
-
-        model_name = model_id
-        model = HookedTransformer.from_pretrained(
-            parent_model_id,
+        model_id = "eekay/mistral-7b-instruct-dpo"
+        model_name = "mistral_dpo"
+        hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
+        model = HookedTransformer.from_pretrained_no_processing(
+            "mistralai/Mistral-7B-Instruct",
             hf_model=hf_model
             device=device,
             dtype=dtype,
-            fold_ln=False,
-            center_writing_weights=False,
-            center_unembed=False,
         )
+        del hf_model
 
-    model_name = model_id.split("/")[-1]
     model.requires_grad_(False)
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_ZEPHYR = True
-model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_ZEPHYR)
+USE_BASE = True
+model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
-model.requires_grad_(False)
 t.cuda.empty_cache()
 
 #%% example response generation
@@ -275,8 +271,8 @@ merge_completions = True
 if merge_completions:
     from utils import merge_model_completions
     merge_model_completions(
-        "./data/zephyr-7b-beta_completions.json",
-        "./data/mistral-7b_completions.json",
+        "./data/mistral_completions.json",
+        "./data/mistral_dpo_completions.json",
         "./data/merged_completions.json",
         tokenizer=tokenizer,
         max_seq_len=2048
@@ -301,13 +297,13 @@ if compute_likelihoods:
 
     if ref_model is None:
         print(f"{yellow}Loading reference model (mistral)...{endc}")
-        ref_model, *_ = load_model(use_zephyr=False)
+        ref_model, *_ = load_model(use_base=False)
         ref_model.requires_grad_(False)
     
     # Map model names to actual model objects
     models = {
-        "zephyr-7b-beta": model,
-        "mistral-7b": ref_model,
+        "mistral_dpo": model,
+        "mistral": ref_model,
     }
     
     # Count how many need computing
@@ -370,7 +366,6 @@ if compute_probe_rewards:
     
     model_names = merged_data["models"]
     
-    # Load probe (uses zephyr model which should already be loaded)
     probe = LinearProbe.load(model, probe_hash)
     print(f"Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name})")
 
@@ -436,11 +431,7 @@ from utils import generate_with_logit_diff_amplification
 
 test_logit_diff_amplification = True
 if test_logit_diff_amplification:
-    # Load both models - zephyr (subject/post-trained) and mistral (reference/base)
-    # Note: This requires having both models loaded. If you only have one loaded above,
-    # you'll need to load the other one here.
-    
-    # ref_model, *_ = load_model(use_zephyr=False)
+    # ref_model, *_ = load_model(use_base=False)
     
     # Test prompts
     # prompt = "What's 18/3?"
@@ -483,13 +474,13 @@ if visualize_probe_rewards:
             completion_data = entry["completions"][source_model]
             
             # Get logprob sums from both models
-            zephyr_logprob = completion_data["likelihood"]["zephyr-7b-beta"]
-            mistral_logprob = completion_data["likelihood"]["mistral-7b"]
+            mistral_dpo_logprob = completion_data["likelihood"]["mistral_dpo"]
+            mistral_logprob = completion_data["likelihood"]["mistral"]
             
-            if zephyr_logprob is None or mistral_logprob is None:
+            if mistral_dpo_logprob is None or mistral_logprob is None:
                 continue
             
-            logprob_diff = zephyr_logprob - mistral_logprob
+            logprob_diff = mistral_dpo_logprob - mistral_logprob
             probe_reward = completion_data.get("probe_reward")
             
             if probe_reward is None:
@@ -503,8 +494,8 @@ if visualize_probe_rewards:
     
     df = pd.DataFrame(rows)
     
-    # Map colors: mistral (base) = red, zephyr = blue
-    color_map = {"mistral-7b": "red", "zephyr-7b-beta": "blue"}
+    # Map colors: mistral (base) = red, mistral dpo = blue
+    color_map = {"mistral": "red", "mistral_dpo": "blue"}
     
     fig = px.scatter(
         df,
@@ -513,7 +504,7 @@ if visualize_probe_rewards:
         color="source_model",
         color_discrete_map=color_map,
         labels={
-            "logprob_diff": "Logprob Difference (Zephyr - Mistral)",
+            "logprob_diff": "Logprob Difference (Mistral DPO - Mistral)",
             "probe_reward": "Probe Predicted Reward",
             "source_model": "Source Model",
         },
@@ -551,10 +542,10 @@ if visualize_probe_rewards:
     for model_name in merged_data["models"]:
         model_df = df[df["source_model"] == model_name]
         print(f"\n{model_name}:")
-        print(f"  Logprob diff (zephyr - mistral): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
+        print(f"  Logprob diff (mistral dpo - mistral): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
         print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
 
-#%% top k prompts with largest probe reward difference (zephyr - mistral)
+#%% top k prompts with largest probe reward difference (mistral dpo - mistral)
 
 show_top_k_prompts = True
 if show_top_k_prompts:
@@ -570,51 +561,52 @@ if show_top_k_prompts:
     # Compute probe reward difference for each prompt
     prompt_diffs = []
     for entry in merged_data["completions"]:
-        zephyr_data = entry["completions"].get("zephyr-7b-beta", {})
-        mistral_data = entry["completions"].get("mistral-7b", {})
+        mistral_dpo_data = entry["completions"].get("mistral_dpo", {})
+        mistral_data = entry["completions"].get("mistral", {})
         
-        zephyr_reward = zephyr_data.get("probe_reward")
+        mistral_dpo_reward = mistral_dpo_data.get("probe_reward")
         mistral_reward = mistral_data.get("probe_reward")
         
-        if zephyr_reward is None or mistral_reward is None:
+        if mistral_dpo_reward is None or mistral_reward is None:
             continue
         
         # Extract assistant responses from full text
-        zephyr_text = zephyr_data.get("text", "")
+        mistral_dpo_text = mistral_dpo_data.get("text", "")
         mistral_text = mistral_data.get("text", "")
         
         try:
-            zephyr_response = zephyr_text[zephyr_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
+            mistral_dpo_response = mistral_dpo_text[mistral_dpo_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
             mistral_response = mistral_text[mistral_text.index(assistant_marker) + len(assistant_marker):].rstrip("</s>").strip()
         except ValueError:
             continue
         
-        reward_diff = zephyr_reward - mistral_reward
+        reward_diff = mistral_dpo_reward - mistral_reward
         prompt_diffs.append({
             "idx": entry["idx"],
             "prompt": entry["prompt"],
-            "zephyr_reward": zephyr_reward,
+            "mistral_dpo_reward": mistral_dpo_reward,
             "mistral_reward": mistral_reward,
             "reward_diff": reward_diff,
-            "zephyr_response": zephyr_response,
             "mistral_response": mistral_response,
+            "mistral_dpo_response": mistral_dpo_response,
         })
     
     # Sort by reward difference (largest first)
     prompt_diffs.sort(key=lambda x: x["reward_diff"], reverse=True)
     
     print(f"\n{'='*100}")
-    print(f"Top {k} prompts where Zephyr completions scored higher than Mistral (by probe reward)")
+    print(f"Top {k} prompts where Mistral DPO completions scored higher than Mistral (by probe reward)")
     print(f"{'='*100}\n")
     
     for i, item in enumerate(prompt_diffs[:k]):
         print(f"{cyan}#{i+1} (idx={item['idx']}) | Δreward = {item['reward_diff']:+.2f}{endc}")
         print(f"{cyan}Prompt:{endc} {item['prompt'][:300]}{'...' if len(item['prompt']) > 300 else ''}")
         print()
-        print(f"{blue}[Zephyr] (reward: {item['zephyr_reward']:.2f}):{endc}")
-        print(f"{item['zephyr_response'][:500]}{'...' if len(item['zephyr_response']) > 500 else ''}")
+        print(f"{blue}[Mistral DPO] (reward: {item['mistral_dpo_reward']:.2f}):{endc}")
+        print(f"{item['mistral_dpo_response'][:500]}{'...' if len(item['mistral_dpo_response']) > 500 else ''}")
         print()
         print(f"{red}[Mistral] (reward: {item['mistral_reward']:.2f}):{endc}")
         print(f"{item['mistral_response'][:500]}{'...' if len(item['mistral_response']) > 500 else ''}")
+        print()
         print(f"\n{'-'*100}\n")
 
