@@ -6,48 +6,36 @@ DEVICE = "cuda"
 DTYPE = t.bfloat16 
 # DTYPE = t.float32 
 
-#%% loading zephyr into mistral 7b the base model
+#%% loading one of the 2 models
 
-def load_model(use_zephyr: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceH4/zephyr-7b-beta")
-    if use_zephyr:
-        model_id = "HuggingFaceH4/zephyr-7b-beta"
-        model_name = model_id.split("/")[-1]
-        parent_model_id = "mistral-7b"
-        hf_model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            device_map=device
-        )
-
-        model = HookedTransformer.from_pretrained(
+def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
+    parent_model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+    if use_base:
+        model = HookedTransformer.from_pretrained_no_processing(
             parent_model_id,
-            hf_model=hf_model,
             device=device,
             dtype=dtype,
-            fold_ln=False,
-            center_writing_weights=False,
-            center_unembed=False,
-            tokenizer=tokenizer
         )
-        del hf_model
 
     else:
         model_id = "mistral-7b"
+        hf_model = AutoModelForCausalLM.from_pretrained(parent_model_id, torch_dtype=dtype, device_map=device)
+
         model_name = model_id
         model = HookedTransformer.from_pretrained(
-            model_id,
+            parent_model_id,
+            hf_model=hf_model
             device=device,
             dtype=dtype,
             fold_ln=False,
             center_writing_weights=False,
             center_unembed=False,
-            tokenizer=tokenizer
         )
 
+    model_name = model_id.split("/")[-1]
     model.requires_grad_(False)
     t.cuda.empty_cache()
-    return model, tokenizer, model_id, model_name
+    return model, model.tokenizer, model_id, model_name
 
 USE_ZEPHYR = True
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_ZEPHYR)
