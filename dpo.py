@@ -259,4 +259,49 @@ if __name__ == "__main__":
     
     print("DPO training complete!")
 
+#%% Merge adapter into base model locally
+
+from peft import PeftModel
+
+def merge_adapter_locally(
+    base_model_id: str = MODEL_ID,
+    adapter_id: str = HUB_REPO_ID_ADAPTER,
+    output_dir: str = "./merged_model",
+    push_to_hub: bool = False,
+    hub_repo_id: str = HUB_REPO_ID_MERGED,
+):
+    """Load the base model and adapter, merge them, and save locally."""
+    
+    print(f"Loading base model: {base_model_id}")
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_id,
+        torch_dtype=DTYPE,
+        device_map="auto",
+    )
+    
+    print(f"Loading adapter: {adapter_id}")
+    model_with_adapter = PeftModel.from_pretrained(base_model, adapter_id)
+    
+    print("Merging adapter into base model...")
+    merged_model = model_with_adapter.merge_and_unload()
+    
+    print(f"Saving merged model to {output_dir}")
+    merged_model.save_pretrained(output_dir)
+    
+    # Also save tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(base_model_id)
+    tokenizer.save_pretrained(output_dir)
+    
+    if push_to_hub:
+        print(f"Pushing merged model to Hub: {hub_repo_id}")
+        merged_model.push_to_hub(hub_repo_id, commit_message="Merged model")
+        tokenizer.push_to_hub(hub_repo_id, commit_message="Add tokenizer")
+        print(f"Pushed to https://huggingface.co/{hub_repo_id}")
+    
+    print("Merge complete!")
+    return merged_model, tokenizer
+
+# Run merge
+merged_model, tokenizer = merge_adapter_locally()
+
 #%%
