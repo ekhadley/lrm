@@ -257,7 +257,7 @@ if generate_new_completions:
             completions[idx] = {
                 "idx": idx,
                 **dict(ex),
-                "completion": completion_text,
+                "new_response": completion_text,
             }
 
             bar.set_description(f"{lime}[{len(completions)}/{n_target_completions}] generated {user_prompt_len}+{completion_len} toks{endc}")

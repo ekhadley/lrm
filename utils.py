@@ -473,7 +473,7 @@ def merge_model_completions(
         The merged data dict
     
     Input format (per-model completions file):
-        Each completion should have a "completion" field containing just the model's
+        Each completion should have a "new_response" field containing just the model's
         response text (no special tokens or chat template markup).
     
     Output format:
@@ -524,9 +524,9 @@ def merge_model_completions(
         c1 = completions1[idx]
         c2 = completions2[idx]
         
-        # completion field contains just the model's response text (no special tokens)
-        text1 = c1.get("completion", "")
-        text2 = c2.get("completion", "")
+        # new_response field contains just the model's response text (no special tokens)
+        text1 = c1.get("new_response", "")
+        text2 = c2.get("new_response", "")
         prompt = c1.get("prompt", c2.get("prompt"))
         
         # Filter by token length if tokenizer provided
