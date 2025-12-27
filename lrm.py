@@ -95,10 +95,10 @@ if train_rating_probe:
     probe_layer = 16
     # for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-    lr = 4e-4
+    lr = 1e-3
     batch_size = 16
     epochs = 1
-    weight_decay = 1e-2
+    weight_decay = 1e-3
     target_user_prompt = False
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
@@ -124,7 +124,7 @@ if train_rating_probe:
         "target_user_prompt":target_user_prompt,
         "weight_decay":weight_decay,
         "model": MODEL_ID,
-        "note": ""
+        "note": "lr scheduler"
     }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
