@@ -202,23 +202,12 @@ def train_dpo(
         peft_config=peft_config,
     )
     
-    # Test merge and push before training
-    if hub_repo_merged or hub_repo_adapter:
-        print("Testing push before training...")
-        
-        # Push adapter
-        if hub_repo_adapter:
-            trainer.model.push_to_hub(hub_repo_adapter, commit_message="Pre-training test (adapter)")
-            tokenizer.push_to_hub(hub_repo_adapter, commit_message="Add tokenizer")
-            print(f"Adapter push complete: https://huggingface.co/{hub_repo_adapter}")
-        
-        # Push merged model
-        if hub_repo_merged:
-            trainer.model.merge_adapter()
-            trainer.model.push_to_hub(hub_repo_merged, commit_message="Pre-training test (merged)")
-            tokenizer.push_to_hub(hub_repo_merged, commit_message="Add tokenizer")
-            trainer.model.unmerge_adapter()
-            print(f"Merged push complete: https://huggingface.co/{hub_repo_merged}")
+    # Test push before training (adapter only - merged requires destructive merge_and_unload)
+    if hub_repo_adapter:
+        print("Testing adapter push before training...")
+        trainer.model.push_to_hub(hub_repo_adapter, commit_message="Pre-training test (adapter)")
+        tokenizer.push_to_hub(hub_repo_adapter, commit_message="Add tokenizer")
+        print(f"Adapter test push complete: https://huggingface.co/{hub_repo_adapter}")
     
     # Train
     print("Starting DPO training...")
