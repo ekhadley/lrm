@@ -768,7 +768,7 @@ def get_assistant_response_logprob_sum(
     
     with t.inference_mode():
         logits = model(full_tokens.unsqueeze(0))  # [1, seq_len, vocab_size]
-        logits = logits.squeeze(0)  # [seq_len, vocab_size]
+        logits = logits.squeeze(0).to(t.float32)  # [seq_len, vocab_size]
         
         # Get log probabilities
         log_probs = t.nn.functional.log_softmax(logits, dim=-1)  # [seq_len, vocab_size]

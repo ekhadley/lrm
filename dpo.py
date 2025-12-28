@@ -4,7 +4,7 @@ import torch as t
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from datasets import load_dataset
 from trl import DPOTrainer, DPOConfig
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
 import wandb
 
 # ============================= Config ============================= #
@@ -22,13 +22,13 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 OUTPUT_DIR = "./dpo_output"
 HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
 HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
-LEARNING_RATE = 5e-7
+LEARNING_RATE = 1e-5
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
 MAX_LENGTH = 1024
 MAX_PROMPT_LENGTH = 512
-BETA = 0.1  # DPO beta parameter (controls deviation from reference model)
+BETA = 0.05  # DPO beta parameter (controls deviation from reference model)
 WARMUP_RATIO = 0.1
 LOGGING_STEPS = 10
 SAVE_STEPS = 500
@@ -262,7 +262,6 @@ if __name__ == "__main__":
 
 #%% Merge adapter into base model locally
 
-from peft import PeftModel
 
 def merge_adapter_locally(
     base_model_id: str = MODEL_ID,
@@ -303,6 +302,6 @@ def merge_adapter_locally(
     return merged_model, tokenizer
 
 # Run merge
-merged_model, tokenizer = merge_adapter_locally()
+# merged_model, tokenizer = merge_adapter_locally()
 
 #%%

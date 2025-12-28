@@ -23,7 +23,7 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
         model_id = "eekay/mistral-7b-instruct-dpo"
         model_name = "mistral_dpo"
         # hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
-        hf_model = AutoModelForCausalLM.from_pretrained("./merged_model", torch_dtype=dtype, device_map=device)
+        hf_model = AutoModelForCausalLM.from_pretrained("./merged_model", torch_dtype=dtype, device_map="cpu")
         model = HookedTransformer.from_pretrained_no_processing(
             "mistral-7b-instruct",
             hf_model=hf_model,
@@ -311,7 +311,7 @@ if merge_completions:
         "./data/mistral_dpo_completions.json",
         "./data/merged_completions.json",
         tokenizer=tokenizer,
-        max_seq_len=2048
+        max_seq_len=model.cfg.n_ctx
     )
 
 #%% getting the sum of logprobs of completions using the current model
@@ -342,8 +342,8 @@ if compute_likelihoods:
                 completion_data["likelihood"] = {}
             
             # Skip if already computed for this model
-            if completion_data["likelihood"].get(MODEL_NAME) is not None:
-                continue
+            # if completion_data["likelihood"].get(MODEL_NAME) is not None:
+            #     continue
             
             conversation = [
                 {"role": "user", "content": prompt},
@@ -365,7 +365,7 @@ if compute_likelihoods:
 
 from utils import LinearProbe
 
-compute_probe_rewards = True
+compute_probe_rewards = False
 if compute_probe_rewards:
     merged_path = "./data/merged_completions.json"
     probe_hash = "711061a94bf3"
