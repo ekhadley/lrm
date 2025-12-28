@@ -248,6 +248,7 @@ if __name__ == "__main__":
     # Load dataset
     dataset = load_ultrafeedback_dataset()
     
+    #%%
     # Train
     trainer = train_dpo(
         model=model,

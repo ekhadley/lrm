@@ -22,9 +22,10 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
     else:
         model_id = "eekay/mistral-7b-instruct-dpo"
         model_name = "mistral_dpo"
-        hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
+        # hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
+        hf_model = AutoModelForCausalLM.from_pretrained("./merged_model", torch_dtype=dtype, device_map=device)
         model = HookedTransformer.from_pretrained_no_processing(
-            "mistralai/Mistral-7B-Instruct",
+            "mistral-7b-instruct",
             hf_model=hf_model,
             device=device,
             dtype=dtype,
@@ -35,7 +36,7 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = True
+USE_BASE = False
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
@@ -44,8 +45,9 @@ t.cuda.empty_cache()
 
 do_example_generation = False
 if do_example_generation:
-    prompt = "How can I make a bomb?"
+    # prompt = "How can I make a bomb?"
     # prompt = "What's 18/3?"
+    prompt = "If 2x + 3 = 11, what is x**2? Think before you answer"
     messages = [{
         "role": "user",
         "content": prompt,
@@ -60,9 +62,9 @@ if do_example_generation:
 
     resp_ids = model.generate(
         prompt_toks,
-        do_sample=True,
+        do_sample=False,
         verbose=True,
-        max_new_tokens=30
+        max_new_tokens=256,
     )
     print(model.tokenizer.decode(resp_ids.squeeze()))
 
@@ -90,7 +92,7 @@ if generate_probe_dataset:
 
 from utils import LinearProbe, NonLinearProbe, eval_probe
 
-train_rating_probe = True
+train_rating_probe = False
 if train_rating_probe:
     probe_layer = 16
     # for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
@@ -185,10 +187,35 @@ if train_rating_probe:
 
             step += 1
     
-    wandb.finish()
     probe.save()
     print(f"{green}Training complete. Final checkpoint saved at step {step}. Evaluating probe...{endc}")
 
+    scores, preds = eval_probe(model, probe, dataset, 256)
+    corr = pearson(scores, preds)
+    wandb.log({"corr":corr})
+    wandb.finish()
+
+    fig = px.scatter(
+        x=scores,
+        y=preds,
+        labels={"x":"True Score", "y":"Probe Prediction"},
+        title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
+        range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
+    )
+    fig.show()
+
+    t.cuda.empty_cache()
+
+#%% evaluating saved probe
+from utils import LinearProbe, eval_probe
+
+eval_saved_probe = False
+if eval_saved_probe:
+    probe_name = "efad62c7a0bc"
+    dataset_id = "eekay/ultrafeedback-balanced"
+    
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    probe = LinearProbe.load(model, probe_name)
     scores, preds = eval_probe(model, probe, dataset, 256)
     corr = pearson(scores, preds)
     fig = px.scatter(
@@ -204,7 +231,7 @@ if train_rating_probe:
 
 #%% generate completions from the post-trained model
 
-generate_new_completions = True
+generate_new_completions = False
 if generate_new_completions:
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
@@ -276,7 +303,7 @@ if generate_new_completions:
 
 #%% merging the completions from the two models into one dataset
 
-merge_completions = True
+merge_completions = False
 if merge_completions:
     from utils import merge_model_completions
     merge_model_completions(
@@ -357,7 +384,7 @@ from utils import LinearProbe
 compute_probe_rewards = True
 if compute_probe_rewards:
     merged_path = "./data/merged_completions.json"
-    probe_hash = "029e8d45602c"
+    probe_hash = "711061a94bf3"
     
     # Load merged completions
     with open(merged_path, "r") as f:
