@@ -1,5 +1,3 @@
-#%%
-
 import torch as t
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from datasets import load_dataset
@@ -8,8 +6,6 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, Pe
 import wandb
 
 # ============================= Config ============================= #
-
-#%%
 
 DEVICE = "cuda"
 DTYPE = t.bfloat16
@@ -22,6 +18,10 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 OUTPUT_DIR = "./dpo_output"
 HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
 HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
+# OUTPUT_DIR = "./short_dpo_output"
+# HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-short-dpo"  # Hub repo for merged model
+# HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-short-dpo-adapter"  # Hub repo for LoRA adapter
+
 LEARNING_RATE = 1e-5
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
@@ -86,14 +86,11 @@ def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLO
     
     return model, tokenizer, peft_config
 
-#%%
-
-def load_ultrafeedback_dataset():
-    """Load and format the UltraFeedback binarized dataset for DPO."""
+def load_preference_dataset(dataset=None):
+    dataset_id = "HuggingFaceH4/ultrafeedback_binarized" if dataset is None else dataset
+    print(f"Loading dataset: '{dataset_id}'")
     
-    print("Loading UltraFeedback binarized dataset...")
-    
-    dataset = load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
+    dataset = load_dataset(dataset_id, split="train_prefs" if dataset is None else "train")
     
     # The dataset has 'chosen' and 'rejected' columns which contain message lists
     # DPO trainer expects: prompt, chosen, rejected columns
@@ -139,8 +136,6 @@ def load_ultrafeedback_dataset():
     print(f"Example: {formatted_dataset[0]}")
     
     return formatted_dataset
-
-#%%
 
 def train_dpo(
     model,
@@ -239,16 +234,14 @@ def train_dpo(
     
     return trainer
 
-#%%
-
 if __name__ == "__main__":
     # Load model and tokenizer
     model, tokenizer, peft_config = load_model_and_tokenizer()
     
     # Load dataset
-    dataset = load_ultrafeedback_dataset()
+    dataset = load_preference_dataset()
+    # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-short-pref")
     
-    #%%
     # Train
     trainer = train_dpo(
         model=model,
@@ -259,9 +252,6 @@ if __name__ == "__main__":
     )
     
     print("DPO training complete!")
-
-#%% Merge adapter into base model locally
-
 
 def merge_adapter_locally(
     base_model_id: str = MODEL_ID,
@@ -303,5 +293,3 @@ def merge_adapter_locally(
 
 # Run merge
 # merged_model, tokenizer = merge_adapter_locally()
-
-#%%
