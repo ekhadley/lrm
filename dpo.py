@@ -21,6 +21,7 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 OUTPUT_DIR = "./short_dpo_output"
 HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-short-dpo"  # Hub repo for merged model
 HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-short-dpo-adapter"  # Hub repo for LoRA adapter
+ADAPTER_PATH = "./dpo_output/checkpoint-500"  # Path to existing adapter to resume from, or None to init new
 
 LEARNING_RATE = 5e-6
 BATCH_SIZE = 8
@@ -36,7 +37,7 @@ EVAL_STEPS = 100
 
 # ============================= Load Model ============================= #
 
-def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLORA):
+def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLORA, adapter_path: str | None = ADAPTER_PATH):
     """Load the model and tokenizer for DPO training."""
     
     print(f"Loading model: {model_id}")
@@ -66,15 +67,21 @@ def load_model_and_tokenizer(model_id: str = MODEL_ID, use_qlora: bool = USE_QLO
         )
         model = prepare_model_for_kbit_training(model)
         
-        # LoRA config
-        peft_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        # Load existing adapter or create new LoRA config
+        if adapter_path is not None:
+            print(f"Loading existing adapter from: {adapter_path}")
+            model = PeftModel.from_pretrained(model, adapter_path)
+            peft_config = None  # Already applied, don't pass to trainer
+        else:
+            # LoRA config
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
@@ -182,7 +189,7 @@ def train_dpo(
         bf16=True,
         gradient_checkpointing=True,
         optim="adamw_torch_fused",
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=None,
         report_to="wandb" if use_wandb else "none",
         remove_unused_columns=False,
         loss_type="sigmoid",  # Standard DPO loss
