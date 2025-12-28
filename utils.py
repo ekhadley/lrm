@@ -450,6 +450,85 @@ def make_probe_dataset(*, ufb_dataset=None, uf_dataset=None, hs_dataset=None, ba
     
     return probe_dataset
 
+# ======================= preference relabeling ========================== #
+
+def relabel_ultrafeedback_binarized(
+    dataset: Dataset,
+    keep_chosen_fn: callable,
+) -> Dataset:
+    """
+    Relabel winners and losers in UltraFeedback Binarized dataset based on a predicate.
+    
+    Args:
+        dataset: UltraFeedback Binarized dataset (HuggingFaceH4/ultrafeedback_binarized format)
+                 Expected fields: chosen, rejected, score_chosen, score_rejected
+        keep_chosen_fn: A function that takes an example dict and returns:
+                        - True: keep current chosen as preferred (no swap)
+                        - False: swap chosen and rejected
+    
+    Returns:
+        A new Dataset with chosen/rejected (and their scores) swapped where keep_chosen_fn returned False.
+    
+    Example:
+        # Relabel based on probe predictions
+        def should_keep_chosen(ex):
+            chosen_score = get_probe_score(ex["chosen"])
+            rejected_score = get_probe_score(ex["rejected"])
+            return chosen_score >= rejected_score
+        
+        relabeled = relabel_ultrafeedback_binarized(dataset, should_keep_chosen)
+    """
+    new_chosen = []
+    new_rejected = []
+    new_score_chosen = []
+    new_score_rejected = []
+    
+    # Preserve any other columns
+    other_columns = {}
+    for col in dataset.column_names:
+        if col not in ["chosen", "rejected", "score_chosen", "score_rejected"]:
+            other_columns[col] = []
+    
+    for example in tqdm(dataset, desc="Relabeling preferences"):
+        keep_current = keep_chosen_fn(example)
+        
+        if keep_current:
+            # Keep as-is
+            new_chosen.append(example["chosen"])
+            new_rejected.append(example["rejected"])
+            if "score_chosen" in example:
+                new_score_chosen.append(example["score_chosen"])
+            if "score_rejected" in example:
+                new_score_rejected.append(example["score_rejected"])
+        else:
+            # Swap chosen and rejected
+            new_chosen.append(example["rejected"])
+            new_rejected.append(example["chosen"])
+            if "score_chosen" in example:
+                new_score_chosen.append(example["score_rejected"])
+            if "score_rejected" in example:
+                new_score_rejected.append(example["score_chosen"])
+        
+        # Copy other columns unchanged
+        for col in other_columns:
+            other_columns[col].append(example[col])
+    
+    # Build the result dict
+    result_dict = {
+        "chosen": new_chosen,
+        "rejected": new_rejected,
+    }
+    
+    if new_score_chosen:
+        result_dict["score_chosen"] = new_score_chosen
+    if new_score_rejected:
+        result_dict["score_rejected"] = new_score_rejected
+    
+    result_dict.update(other_columns)
+    
+    return Dataset.from_dict(result_dict)
+
+
 # ======================= completion merging ========================== #
 
 def merge_model_completions(

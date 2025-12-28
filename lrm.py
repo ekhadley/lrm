@@ -87,6 +87,38 @@ if generate_probe_dataset:
     print(balanced_dataset[1])
     print(balanced_dataset[2])
     # balanced_dataset.push_to_hub("eekay/helpsteer2-balanced")
+
+#%% relabel ultrafeedback binarized to prefer shorter responses
+
+from utils import relabel_ultrafeedback_binarized
+
+create_short_pref_dataset = True
+if create_short_pref_dataset:
+    ufb = datasets.load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
+    
+    def prefer_shorter(example):
+        """Return True to keep current chosen, False to swap (prefer shorter)."""
+        chosen_text = example["chosen"][1]["content"]
+        rejected_text = example["rejected"][1]["content"]
+        
+        chosen_len = len(tokenizer.encode(chosen_text))
+        rejected_len = len(tokenizer.encode(rejected_text))
+        
+        # Keep current labeling if chosen is shorter or equal
+        return chosen_len <= rejected_len
+    
+    short_pref_dataset = relabel_ultrafeedback_binarized(ufb, prefer_shorter)
+    print(f"Relabeled {len(short_pref_dataset)} examples")
+    
+    # Show stats on how many were swapped
+    n_swapped = sum(
+        1 for orig, new in zip(ufb, short_pref_dataset)
+        if orig["chosen"] != new["chosen"]
+    )
+    print(f"Swapped {n_swapped}/{len(short_pref_dataset)} examples ({100*n_swapped/len(short_pref_dataset):.1f}%)")
+    
+    short_pref_dataset.push_to_hub("eekay/ultrafeedback-binarized-short-pref")
+    print(f"{green}Pushed to eekay/ultrafeedback-binarized-short-pref{endc}")
     
 #%%
 
