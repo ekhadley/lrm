@@ -484,15 +484,8 @@ def merge_model_completions(
                     "idx": 0,
                     "prompt": "...",
                     "completions": {
-                        "model1_name": {
-                            "text": "assistant response only...",
-                            "likelihood": {
-                                "model1_name": null,
-                                "model2_name": null
-                            },
-                            "probe_reward": null
-                        },
-                        "model2_name": {...}
+                        "model1_name": {"text": "assistant response only..."},
+                        "model2_name": {"text": "..."}
                     }
                 },
                 ...
@@ -500,7 +493,6 @@ def merge_model_completions(
         }
     
     Only includes examples where both models have a completion.
-    Likelihood and probe_reward values are initialized to null and should be filled in later.
     """
     with open(file1, "r") as f:
         data1 = json.load(f)
@@ -545,22 +537,8 @@ def merge_model_completions(
             "idx": idx,
             "prompt": prompt,
             "completions": {
-                model1_name: {
-                    "text": text1,
-                    "likelihood": {
-                        model1_name: None,
-                        model2_name: None,
-                    },
-                    "probe_reward": None,
-                },
-                model2_name: {
-                    "text": text2,
-                    "likelihood": {
-                        model1_name: None,
-                        model2_name: None,
-                    },
-                    "probe_reward": None,
-                },
+                model1_name: {"text": text1},
+                model2_name: {"text": text2},
             }
         })
     

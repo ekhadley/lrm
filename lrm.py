@@ -314,7 +314,7 @@ if merge_completions:
         max_seq_len=2048
     )
 
-#%% getting the sum of logprobs of the completions we created using the base and posttrained model
+#%% getting the sum of logprobs of completions using the current model
 
 from utils import get_assistant_response_logprob_sum
 
@@ -325,55 +325,39 @@ if compute_likelihoods:
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     
-    model_names = merged_data["models"]
-    print(f"Models: {model_names}")
+    completion_model_names = merged_data["models"]
+    print(f"Scoring with {MODEL_NAME} on completions from: {completion_model_names}")
     
-    try: ref_model
-    except NameError: ref_model = None
-
-    if ref_model is None:
-        print(f"{yellow}Loading reference model (mistral)...{endc}")
-        ref_model, *_ = load_model(use_base=False)
-        ref_model.requires_grad_(False)
-    
-    # Map model names to actual model objects
-    models = {
-        "mistral_dpo": model,
-        "mistral": ref_model,
-    }
-    
-    # Count how many need computing
-    n_total = len(merged_data["completions"]) * len(model_names) * len(model_names)
     n_computed = 0
     
-    for entry in tqdm(merged_data["completions"], desc="Computing likelihoods"):
+    for entry in tqdm(merged_data["completions"], desc=f"Computing {MODEL_NAME} likelihoods"):
         prompt = entry["prompt"]
         
-        for completion_model_name in model_names:
+        for completion_model_name in completion_model_names:
             completion_data = entry["completions"][completion_model_name]
-            # text field now contains just the model's response (no special tokens)
             assistant_response = completion_data["text"]
             
-            for scoring_model_name in model_names:
-                # Skip if already computed
-                if completion_data["likelihood"][scoring_model_name] is not None:
-                    continue
-                
-                scoring_model = models[scoring_model_name]
-                
-                conversation = [
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": assistant_response}
-                ]
-                
-                logprob_sum = get_assistant_response_logprob_sum(scoring_model, conversation)
-                completion_data["likelihood"][scoring_model_name] = logprob_sum
-                n_computed += 1
+            # Initialize likelihood dict if not present
+            if "likelihood" not in completion_data:
+                completion_data["likelihood"] = {}
+            
+            # Skip if already computed for this model
+            if completion_data["likelihood"].get(MODEL_NAME) is not None:
+                continue
+            
+            conversation = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": assistant_response}
+            ]
+            
+            logprob_sum = get_assistant_response_logprob_sum(model, conversation)
+            completion_data["likelihood"][MODEL_NAME] = logprob_sum
+            n_computed += 1
     
     # Save
     with open(merged_path, "w") as f:
         json.dump(merged_data, f, indent=2)
-    print(f"{green}Done! Computed {n_computed} likelihoods, saved to {merged_path}{endc}")
+    print(f"{green}Done! Computed {n_computed} likelihoods for {MODEL_NAME}, saved to {merged_path}{endc}")
     
     t.cuda.empty_cache()
 
