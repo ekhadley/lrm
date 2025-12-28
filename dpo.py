@@ -15,14 +15,14 @@ MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
 USE_QLORA = True  # Use QLoRA for memory efficiency
 
 # Training config
-OUTPUT_DIR = "./dpo_output"
-HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
-HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
-# OUTPUT_DIR = "./short_dpo_output"
-# HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-short-dpo"  # Hub repo for merged model
-# HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-short-dpo-adapter"  # Hub repo for LoRA adapter
+# OUTPUT_DIR = "./dpo_output"
+# HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
+# HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
+OUTPUT_DIR = "./short_dpo_output"
+HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-short-dpo"  # Hub repo for merged model
+HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-short-dpo-adapter"  # Hub repo for LoRA adapter
 
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 5e-6
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
@@ -31,8 +31,8 @@ MAX_PROMPT_LENGTH = 512
 BETA = 0.05  # DPO beta parameter (controls deviation from reference model)
 WARMUP_RATIO = 0.1
 LOGGING_STEPS = 10
-SAVE_STEPS = 500
-EVAL_STEPS = 500
+SAVE_STEPS = 100
+EVAL_STEPS = 100
 
 # ============================= Load Model ============================= #
 
@@ -239,8 +239,8 @@ if __name__ == "__main__":
     model, tokenizer, peft_config = load_model_and_tokenizer()
     
     # Load dataset
-    dataset = load_preference_dataset()
-    # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-short-pref")
+    # dataset = load_preference_dataset()
+    dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-short-pref")
     
     # Train
     trainer = train_dpo(
