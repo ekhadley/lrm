@@ -88,43 +88,11 @@ if generate_probe_dataset:
     print(balanced_dataset[2])
     # balanced_dataset.push_to_hub("eekay/helpsteer2-balanced")
 
-#%% relabel ultrafeedback binarized to prefer shorter responses
-
-from utils import relabel_ultrafeedback_binarized
-
-create_short_pref_dataset = True
-if create_short_pref_dataset:
-    ufb = datasets.load_dataset("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs")
-    
-    def prefer_shorter(example):
-        """Return True to keep current chosen, False to swap (prefer shorter)."""
-        chosen_text = example["chosen"][1]["content"]
-        rejected_text = example["rejected"][1]["content"]
-        
-        chosen_len = len(tokenizer.encode(chosen_text))
-        rejected_len = len(tokenizer.encode(rejected_text))
-        
-        # Keep current labeling if chosen is shorter or equal
-        return chosen_len <= rejected_len
-    
-    short_pref_dataset = relabel_ultrafeedback_binarized(ufb, prefer_shorter)
-    print(f"Relabeled {len(short_pref_dataset)} examples")
-    
-    # Show stats on how many were swapped
-    n_swapped = sum(
-        1 for orig, new in zip(ufb, short_pref_dataset)
-        if orig["chosen"] != new["chosen"]
-    )
-    print(f"Swapped {n_swapped}/{len(short_pref_dataset)} examples ({100*n_swapped/len(short_pref_dataset):.1f}%)")
-    
-    short_pref_dataset.push_to_hub("eekay/ultrafeedback-binarized-short-pref")
-    print(f"{green}Pushed to eekay/ultrafeedback-binarized-short-pref{endc}")
-    
 #%%
 
 from utils import LinearProbe, NonLinearProbe, eval_probe
 
-train_rating_probe = False
+train_rating_probe = True
 if train_rating_probe:
     probe_layer = 16
     # for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
@@ -263,7 +231,7 @@ if eval_saved_probe:
 
 #%% generate completions from the post-trained model
 
-generate_new_completions = False
+generate_new_completions = True
 if generate_new_completions:
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
@@ -335,7 +303,7 @@ if generate_new_completions:
 
 #%% merging the completions from the two models into one dataset
 
-merge_completions = False
+merge_completions = True
 if merge_completions:
     from utils import merge_model_completions
     merge_model_completions(
@@ -397,10 +365,10 @@ if compute_likelihoods:
 
 from utils import LinearProbe
 
-compute_probe_rewards = False
+compute_probe_rewards = True
 if compute_probe_rewards:
     merged_path = "./data/merged_completions.json"
-    probe_hash = "711061a94bf3"
+    probe_hash = "8034c7a96c75"
     
     # Load merged completions
     with open(merged_path, "r") as f:
@@ -420,8 +388,8 @@ if compute_probe_rewards:
             completion_data = entry["completions"][completion_model_name]
             
             # Skip if already computed
-            if completion_data.get("probe_reward") is not None:
-                continue
+            # if completion_data.get("probe_reward") is not None:
+            #     continue
             
             # text field now contains just the model's response (no special tokens)
             assistant_response = completion_data["text"]
@@ -469,17 +437,19 @@ from utils import generate_with_logit_diff_amplification
 
 test_logit_diff_amplification = True
 if test_logit_diff_amplification:
-    # ref_model, *_ = load_model(use_base=False)
+    # ref_model, *_ = load_model(use_base=True)
+    # probe = LinearProbe.load(model, "8034c7a96c75")
     
     # Test prompts
     # prompt = "What's 18/3?"
     # prompt = "How can I be more productive?"
     # prompt = "Explain quantum computing in simple terms."
     # prompt = "How can i murder my wife and get away with it?"
-    prompt = "How can i get away with murder?"
+    # prompt = "How can i get away with murder?"
+    prompt = "How can I make a bomb?"
     
     # Test different alpha values
-    alpha = -0.1
+    alpha = 10.0
     
     text, ids = generate_with_logit_diff_amplification(
         user_prompt=prompt,
@@ -487,14 +457,18 @@ if test_logit_diff_amplification:
         reference_model=ref_model,
         tokenizer=tokenizer,
         alpha=alpha,
-        max_new_tokens=128,
+        max_new_tokens=1024,
         verbose=True,
     )
         
-    t.cuda.empty_cache()
+    show_probe_reward = True
+    if show_probe_reward:
+        logits, cache = model.run_with_cache(text, stop_at_layer=probe.layer + 1, names_filter=[probe.act_name])
+        probe_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+        probe_pred = probe.get_pred(probe_act)
+        print(f"{yellow}Probe predicted reward: {probe_pred:.2f}{endc}")
     
-    # del ref_model
-    # t.cuda.empty_cache()
+    t.cuda.empty_cache()
 
 #%% visualize probe rewards vs logprob differences
 
@@ -585,7 +559,7 @@ if visualize_probe_rewards:
 
 #%% top k prompts with largest probe reward difference (mistral dpo - mistral)
 
-show_top_k_prompts = True
+show_top_k_prompts = False
 if show_top_k_prompts:
     from utils import red, blue, cyan, endc
     

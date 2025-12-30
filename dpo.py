@@ -19,11 +19,11 @@ USE_QLORA = True  # Use QLoRA for memory efficiency
 # HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
 # HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
 OUTPUT_DIR = "./short_dpo_output"
-HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-short-dpo"  # Hub repo for merged model
-HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-short-dpo-adapter"  # Hub repo for LoRA adapter
+HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
+HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
 ADAPTER_PATH = "./dpo_output/checkpoint-500"  # Path to existing adapter to resume from, or None to init new
 
-LEARNING_RATE = 5e-6
+LEARNING_RATE = 6e-6
 BATCH_SIZE = 8
 GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
@@ -189,7 +189,7 @@ def train_dpo(
         bf16=True,
         gradient_checkpointing=True,
         optim="adamw_torch_fused",
-        lr_scheduler_type=None,
+        lr_scheduler_type="constant",
         report_to="wandb" if use_wandb else "none",
         remove_unused_columns=False,
         loss_type="sigmoid",  # Standard DPO loss
@@ -241,30 +241,11 @@ def train_dpo(
     
     return trainer
 
-if __name__ == "__main__":
-    # Load model and tokenizer
-    model, tokenizer, peft_config = load_model_and_tokenizer()
-    
-    # Load dataset
-    # dataset = load_preference_dataset()
-    dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-short-pref")
-    
-    # Train
-    trainer = train_dpo(
-        model=model,
-        tokenizer=tokenizer,
-        dataset=dataset,
-        peft_config=peft_config,
-        use_wandb=True,
-    )
-    
-    print("DPO training complete!")
-
 def merge_adapter_locally(
     base_model_id: str = MODEL_ID,
     adapter_id: str = HUB_REPO_ID_ADAPTER,
     output_dir: str = "./merged_model",
-    push_to_hub: bool = False,
+    push_to_hub: bool = True,
     hub_repo_id: str = HUB_REPO_ID_MERGED,
 ):
     """Load the base model and adapter, merge them, and save locally."""
@@ -299,4 +280,30 @@ def merge_adapter_locally(
     return merged_model, tokenizer
 
 # Run merge
-# merged_model, tokenizer = merge_adapter_locally()
+
+if __name__ == "__main__":
+    # # Load model and tokenizer
+    # model, tokenizer, peft_config = load_model_and_tokenizer()
+    
+    # # Load dataset
+    # dataset = load_preference_dataset()
+    # # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-pref")
+    
+    # # Train
+    # trainer = train_dpo(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     dataset=dataset,
+    #     peft_config=peft_config,
+    #     use_wandb=True,
+    # )
+    
+    # print("DPO training complete!")
+
+    merged_model, tokenizer = merge_adapter_locally(
+        base_model_id = MODEL_ID,
+        adapter_id = "./dpo_output/checkpoint-1500",
+        output_dir = "./merged_model",
+        push_to_hub = True,
+        hub_repo_id = HUB_REPO_ID_MERGED
+    )
