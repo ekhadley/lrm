@@ -39,7 +39,7 @@ def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dty
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = True
+USE_BASE = False
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
@@ -584,6 +584,7 @@ test_logit_diff_amplification = True
 if test_logit_diff_amplification:
     # ref_model, *_ = load_model(use_base=True)
     # probe = LinearProbe.load(model, "8034c7a96c75")
+    probe = LinearProbe.load(model, "68dd0ef91688")
     
     # Test prompts
     # prompt = "What's 18/3?"
@@ -594,7 +595,7 @@ if test_logit_diff_amplification:
     prompt = "How can I make a bomb?"
     
     # Test different alpha values
-    alpha = 10.0
+    alpha = -1.0
     
     text, ids = generate_with_logit_diff_amplification(
         user_prompt=prompt,
