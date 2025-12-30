@@ -744,7 +744,7 @@ if visualize_probe_rewards_3models:
     for name in model_names:
         if "logit_diff" in name:
             logit_diff_model_name = name
-        elif "_dpo" in name or "dpo" in name.lower():
+        elif "_dpo" in name:
             dpo_model_name = name
         else:
             base_model_name = name
@@ -753,6 +753,14 @@ if visualize_probe_rewards_3models:
     print(f"DPO model: {dpo_model_name}")
     print(f"Logit diff model: {logit_diff_model_name}")
     
+    # Check if likelihoods exist in the data
+    sample_completion = merged_data["completions"][0]["completions"][model_names[0]]
+    has_likelihoods = "likelihood" in sample_completion and sample_completion["likelihood"]
+    
+    if not has_likelihoods:
+        print(f"{yellow}Warning: No likelihoods found in data. Run the compute_likelihoods cell first.{endc}")
+        print(f"{yellow}Creating bar chart with probe rewards only (no scatterplot).{endc}")
+    
     rows = []
     for entry in merged_data["completions"]:
         for source_model in model_names:
@@ -760,99 +768,109 @@ if visualize_probe_rewards_3models:
             if completion_data is None:
                 continue
             
-            likelihood = completion_data.get("likelihood", {})
             probe_reward = completion_data.get("probe_reward")
-            
             if probe_reward is None:
                 continue
             
-            # Compute logprob_diff based on source model type
+            # Determine model type
             if "logit_diff" in source_model:
-                # For logit_diff completions: diff_amplified_logprob - base_logprob
-                diff_amp_logprob = likelihood.get(dpo_model_name)  # The diff-amplified likelihood is stored under dpo model
-                base_logprob = likelihood.get(base_model_name)
-                if diff_amp_logprob is None or base_logprob is None:
-                    continue
-                logprob_diff = diff_amp_logprob - base_logprob
                 model_type = "logit_diff"
+            elif "_dpo" in source_model:
+                model_type = "dpo"
             else:
-                # For dpo and base completions: dpo_logprob - base_logprob
-                dpo_logprob = likelihood.get(dpo_model_name)
-                base_logprob = likelihood.get(base_model_name)
-                if dpo_logprob is None or base_logprob is None:
-                    continue
-                logprob_diff = dpo_logprob - base_logprob
-                
-                if "_dpo" in source_model or "dpo" in source_model.lower():
-                    model_type = "dpo"
-                else:
-                    model_type = "base"
+                model_type = "base"
             
-            rows.append({
-                "logprob_diff": logprob_diff,
+            row = {
                 "probe_reward": probe_reward,
                 "source_model": source_model,
                 "model_type": model_type,
-            })
+            }
+            
+            # Add logprob_diff if likelihoods exist
+            if has_likelihoods:
+                likelihood = completion_data.get("likelihood", {})
+                
+                if "logit_diff" in source_model:
+                    # For logit_diff completions: diff_amplified_logprob - base_logprob
+                    diff_amp_logprob = likelihood.get(dpo_model_name)
+                    base_logprob = likelihood.get(base_model_name)
+                    if diff_amp_logprob is None or base_logprob is None:
+                        continue
+                    row["logprob_diff"] = diff_amp_logprob - base_logprob
+                else:
+                    # For dpo and base completions: dpo_logprob - base_logprob
+                    dpo_logprob = likelihood.get(dpo_model_name)
+                    base_logprob = likelihood.get(base_model_name)
+                    if dpo_logprob is None or base_logprob is None:
+                        continue
+                    row["logprob_diff"] = dpo_logprob - base_logprob
+            
+            rows.append(row)
     
     df = pd.DataFrame(rows)
     
-    # Map colors: base = red, dpo = blue, logit_diff = green
-    color_map = {"base": "red", "dpo": "blue", "logit_diff": "green"}
-    
-    fig = px.scatter(
-        df,
-        x="logprob_diff",
-        y="probe_reward",
-        color="model_type",
-        color_discrete_map=color_map,
-        hover_data=["source_model"],
-        labels={
-            "logprob_diff": "Logprob Difference (DPO/Amplified - Base)",
-            "probe_reward": "Probe Predicted Reward",
-            "model_type": "Model Type",
-        },
-        title="Probe Rewards vs Logprob Difference by Source Model (3 Models)",
-        template="plotly_dark",
-        height=800,
-        width=1000,
-    )
-    fig.show()
-    fig.write_html("./figures/probe_rewards_vs_logprob_difference_3models.html")
-    
-    # Bar chart of average probe reward by model type
-    avg_rewards = df.groupby("model_type")["probe_reward"].mean().reset_index()
-    avg_rewards.columns = ["model_type", "avg_probe_reward"]
-    
-    # Sort by model type for consistent ordering
-    type_order = ["base", "dpo", "logit_diff"]
-    avg_rewards["order"] = avg_rewards["model_type"].apply(lambda x: type_order.index(x) if x in type_order else 999)
-    avg_rewards = avg_rewards.sort_values("order").drop("order", axis=1)
-    
-    bar_fig = px.bar(
-        avg_rewards,
-        x="model_type",
-        y="avg_probe_reward",
-        color="model_type",
-        color_discrete_map=color_map,
-        labels={
-            "model_type": "Model Type",
-            "avg_probe_reward": "Average Probe Reward",
-        },
-        title="Average Probe Reward by Model Type",
-        template="plotly_dark",
-        height=500,
-        width=600,
-    )
-    bar_fig.show()
-    bar_fig.write_html("./figures/avg_probe_reward_by_model_3models.html")
-    
-    # Print statistics for each model type
-    for model_type in ["base", "dpo", "logit_diff"]:
-        model_df = df[df["model_type"] == model_type]
-        if len(model_df) == 0:
-            continue
-        print(f"\n{model_type}:")
-        print(f"  N samples: {len(model_df)}")
-        print(f"  Logprob diff: mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
-        print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
+    if len(df) == 0:
+        print(f"{red}No data to visualize. Check that probe_reward values exist in the data.{endc}")
+    else:
+        # Map colors: base = red, dpo = blue, logit_diff = green
+        color_map = {"base": "red", "dpo": "blue", "logit_diff": "green"}
+        
+        # Scatterplot (only if likelihoods exist)
+        if has_likelihoods and "logprob_diff" in df.columns:
+            fig = px.scatter(
+                df,
+                x="logprob_diff",
+                y="probe_reward",
+                color="model_type",
+                color_discrete_map=color_map,
+                hover_data=["source_model"],
+                labels={
+                    "logprob_diff": "Logprob Difference (DPO/Amplified - Base)",
+                    "probe_reward": "Probe Predicted Reward",
+                    "model_type": "Model Type",
+                },
+                title="Probe Rewards vs Logprob Difference by Source Model (3 Models)",
+                template="plotly_dark",
+                height=800,
+                width=1000,
+            )
+            fig.show()
+            fig.write_html("./figures/probe_rewards_vs_logprob_difference_3models.html")
+        
+        # Bar chart of average probe reward by model type
+        avg_rewards = df.groupby("model_type")["probe_reward"].mean().reset_index()
+        avg_rewards.columns = ["model_type", "avg_probe_reward"]
+        
+        # Sort by model type for consistent ordering
+        type_order = ["base", "dpo", "logit_diff"]
+        avg_rewards["order"] = avg_rewards["model_type"].apply(lambda x: type_order.index(x) if x in type_order else 999)
+        avg_rewards = avg_rewards.sort_values("order").drop("order", axis=1)
+        
+        bar_fig = px.bar(
+            avg_rewards,
+            x="model_type",
+            y="avg_probe_reward",
+            color="model_type",
+            color_discrete_map=color_map,
+            labels={
+                "model_type": "Model Type",
+                "avg_probe_reward": "Average Probe Reward",
+            },
+            title="Average Probe Reward by Model Type",
+            template="plotly_dark",
+            height=500,
+            width=600,
+        )
+        bar_fig.show()
+        bar_fig.write_html("./figures/avg_probe_reward_by_model_3models.html")
+        
+        # Print statistics for each model type
+        for model_type in ["base", "dpo", "logit_diff"]:
+            model_df = df[df["model_type"] == model_type]
+            if len(model_df) == 0:
+                continue
+            print(f"\n{model_type}:")
+            print(f"  N samples: {len(model_df)}")
+            if has_likelihoods and "logprob_diff" in df.columns:
+                print(f"  Logprob diff: mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
+            print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
