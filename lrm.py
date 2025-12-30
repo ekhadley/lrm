@@ -413,19 +413,33 @@ if merge_completions:
 
 from utils import get_assistant_response_logprob_sum, get_assistant_response_logprob_sum_with_diff_amplification
 
+# Uncomment to load reference model for diff amplification
+# ref_model, *_ = load_model(use_base=True)
+
 compute_likelihoods = True
 if compute_likelihoods:
     merged_path = "./data/all_merged_completions.json"
+    
+    # Set diff_alpha to None for regular likelihood, or a float for diff-amplified likelihood
+    diff_alpha = None  # e.g., 2.0 for amplification
+    
+    # Key to store likelihoods under (defaults based on diff_alpha)
+    if diff_alpha is not None:
+        likelihood_key = f"{MODEL_NAME}_diff_a{diff_alpha}"
+    else:
+        likelihood_key = MODEL_NAME
     
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     
     completion_model_names = merged_data["models"]
-    print(f"Scoring with {MODEL_NAME} on completions from: {completion_model_names}")
+    print(f"Computing likelihoods with key '{likelihood_key}' on completions from: {completion_model_names}")
+    if diff_alpha is not None:
+        print(f"Using diff amplification with alpha={diff_alpha}")
     
     n_computed = 0
     
-    for entry in tqdm(merged_data["completions"], desc=f"Computing {MODEL_NAME} likelihoods"):
+    for entry in tqdm(merged_data["completions"], desc=f"Computing {likelihood_key} likelihoods"):
         prompt = entry["prompt"]
         
         for completion_model_name in completion_model_names:
@@ -436,8 +450,8 @@ if compute_likelihoods:
             if "likelihood" not in completion_data:
                 completion_data["likelihood"] = {}
             
-            # Skip if already computed for this model
-            # if completion_data["likelihood"].get(MODEL_NAME) is not None:
+            # Skip if already computed for this key
+            # if completion_data["likelihood"].get(likelihood_key) is not None:
             #     continue
             
             conversation = [
@@ -445,28 +459,25 @@ if compute_likelihoods:
                 {"role": "assistant", "content": assistant_response}
             ]
             
-            # Check if completion was generated with logit diff amplification
-            if "logit_diff" in completion_model_name:
-                # Parse alpha from model name (e.g., "mistral_dpo_logit_diff_a2" -> alpha=2.0)
-                import re
-                alpha_match = re.search(r"_a(\d+(?:\.\d+)?)", completion_model_name)
-                alpha = float(alpha_match.group(1)) if alpha_match else 1.0
+            if diff_alpha is not None:
+                # Use diff-amplified likelihood for all completions
                 logprob_sum = get_assistant_response_logprob_sum_with_diff_amplification(
                     subject_model=model,
                     reference_model=ref_model,
                     conversation=conversation,
-                    alpha=alpha,
+                    alpha=diff_alpha,
                 )
             else:
+                # Use regular single-model likelihood
                 logprob_sum = get_assistant_response_logprob_sum(model, conversation)
             
-            completion_data["likelihood"][MODEL_NAME] = logprob_sum
+            completion_data["likelihood"][likelihood_key] = logprob_sum
             n_computed += 1
     
     # Save
     with open(merged_path, "w") as f:
         json.dump(merged_data, f, indent=2)
-    print(f"{green}Done! Computed {n_computed} likelihoods for {MODEL_NAME}, saved to {merged_path}{endc}")
+    print(f"{green}Done! Computed {n_computed} likelihoods with key '{likelihood_key}', saved to {merged_path}{endc}")
     
     t.cuda.empty_cache()
 
