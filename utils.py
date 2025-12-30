@@ -815,6 +815,85 @@ def generate_with_logit_diff_amplification(
 
 # ======================= logprob computation ========================== #
 
+def get_assistant_response_logprob_sum_with_diff_amplification(
+    subject_model: HookedTransformer,
+    reference_model: HookedTransformer,
+    conversation: list[dict],
+    alpha: float = 1.0,
+) -> float:
+    """
+    Compute the sum of log probabilities for assistant response tokens under diff-amplified logits.
+    
+    Uses the same amplification scheme as generate_with_logit_diff_amplification:
+        modified_logits = subject_logits + alpha * (subject_logits - reference_logits)
+                        = (1 + alpha) * subject_logits - alpha * reference_logits
+    
+    Args:
+        subject_model: The post-trained model (e.g., mistral dpo)
+        reference_model: The base/reference model (e.g., mistral)
+        conversation: A list of 2 message dicts:
+            [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+        alpha: Amplification factor for logit differences.
+               alpha=0 means no amplification (just subject model).
+               alpha>0 amplifies divergence from reference.
+    
+    Returns:
+        The sum of log probabilities for the assistant response tokens under the amplified distribution.
+    """
+    assert len(conversation) == 2, "Expected exactly 2 messages (1 user, 1 assistant)"
+    assert conversation[0]["role"] == "user", "First message must be from user"
+    assert conversation[1]["role"] == "assistant", "Second message must be from assistant"
+    
+    tokenizer = subject_model.tokenizer
+    device = subject_model.cfg.device
+    
+    # Tokenize just the user message (with generation prompt) to find where assistant starts
+    user_only = [conversation[0]]
+    user_tokens = tokenizer.apply_chat_template(
+        user_only,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).squeeze()
+    prompt_len = user_tokens.shape[0]
+    
+    # Tokenize the full conversation
+    full_tokens = tokenizer.apply_chat_template(
+        conversation,
+        return_tensors="pt",
+    ).squeeze().to(device)
+    
+    seq_len = full_tokens.shape[0]
+    
+    with t.inference_mode():
+        # Get logits from both models
+        subject_logits = subject_model(full_tokens.unsqueeze(0)).squeeze(0).to(t.float32)  # [seq_len, vocab_size]
+        reference_logits = reference_model(full_tokens.unsqueeze(0)).squeeze(0).to(t.float32)  # [seq_len, vocab_size]
+        
+        # Compute amplified logits
+        logit_diff = subject_logits - reference_logits
+        modified_logits = subject_logits + alpha * logit_diff
+        
+        # Get log probabilities from amplified logits
+        log_probs = t.nn.functional.log_softmax(modified_logits, dim=-1)  # [seq_len, vocab_size]
+        
+        # For each assistant token at position i, we want the log prob from position i-1
+        # Assistant tokens are at positions prompt_len, prompt_len+1, ..., seq_len-1
+        # So we gather from positions prompt_len-1, prompt_len, ..., seq_len-2
+        
+        assistant_token_ids = full_tokens[prompt_len:]  # tokens we want to score
+        prediction_positions = log_probs[prompt_len - 1 : seq_len - 1]  # logits that predict them
+        
+        # Gather the log probs for the actual tokens
+        token_log_probs = prediction_positions.gather(
+            dim=-1, 
+            index=assistant_token_ids.unsqueeze(-1)
+        ).squeeze(-1)
+        
+        total_log_prob = token_log_probs.sum().item()
+    
+    return total_log_prob
+
+
 def get_assistant_response_logprob_sum(
     model: HookedTransformer,
     conversation: list[dict],
