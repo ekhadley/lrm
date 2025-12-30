@@ -625,19 +625,23 @@ if visualize_probe_rewards:
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     
+    models = merged_data["models"]
+    assert len(models) == 2, f"Expected 2 models, got {len(models)}: {models}"
+    base_model, dpo_model = models[0], models[1]
+    
     rows = []
     for entry in merged_data["completions"]:
-        for source_model in merged_data["models"]:
+        for source_model in models:
             completion_data = entry["completions"][source_model]
             
             # Get logprob sums from both models
-            mistral_dpo_logprob = completion_data["likelihood"]["mistral_dpo"]
-            mistral_logprob = completion_data["likelihood"]["mistral"]
+            dpo_logprob = completion_data["likelihood"][dpo_model]
+            base_logprob = completion_data["likelihood"][base_model]
             
-            if mistral_dpo_logprob is None or mistral_logprob is None:
+            if dpo_logprob is None or base_logprob is None:
                 continue
             
-            logprob_diff = mistral_dpo_logprob - mistral_logprob
+            logprob_diff = dpo_logprob - base_logprob
             probe_reward = completion_data.get("probe_reward")
             
             if probe_reward is None:
@@ -651,8 +655,8 @@ if visualize_probe_rewards:
     
     df = pd.DataFrame(rows)
     
-    # Map colors: mistral (base) = red, mistral dpo = blue
-    color_map = {"mistral": "red", "mistral_dpo": "blue"}
+    # Map colors: base model = red, dpo model = blue
+    color_map = {base_model: "red", dpo_model: "blue"}
     
     fig = px.scatter(
         df,
@@ -661,7 +665,7 @@ if visualize_probe_rewards:
         color="source_model",
         color_discrete_map=color_map,
         labels={
-            "logprob_diff": "Logprob Difference (Mistral DPO - Mistral)",
+            "logprob_diff": f"Logprob Difference ({dpo_model} - {base_model})",
             "probe_reward": "Probe Predicted Reward",
             "source_model": "Source Model",
         },
@@ -696,10 +700,10 @@ if visualize_probe_rewards:
     bar_fig.write_html("./figures/avg_probe_reward_by_model.html")
     
     # Print statistics for each source model
-    for model_name in merged_data["models"]:
+    for model_name in models:
         model_df = df[df["source_model"] == model_name]
         print(f"\n{model_name}:")
-        print(f"  Logprob diff (mistral dpo - mistral): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
+        print(f"  Logprob diff ({dpo_model} - {base_model}): mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
         print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
 
 #%% top k prompts with largest probe reward difference (mistral dpo - mistral)
