@@ -11,17 +11,16 @@ DEVICE = "cuda"
 DTYPE = t.bfloat16
 
 # Model config
-MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+# MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_NAME = MODEL_ID.split("/")[-1]
 USE_QLORA = True  # Use QLoRA for memory efficiency
 
 # Training config
-# OUTPUT_DIR = "./dpo_output"
-# HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
-# HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
-OUTPUT_DIR = "./short_dpo_output"
-HUB_REPO_ID_MERGED = "eekay/mistral-7b-instruct-dpo"  # Hub repo for merged model
-HUB_REPO_ID_ADAPTER = "eekay/mistral-7b-instruct-dpo-adapter"  # Hub repo for LoRA adapter
-ADAPTER_PATH = "./dpo_output/checkpoint-500"  # Path to existing adapter to resume from, or None to init new
+OUTPUT_DIR = f"./{MODEL_NAME}_dpo_output"
+HUB_REPO_ID_MERGED = f"eekay/{MODEL_NAME}-dpo"  # Hub repo for merged model
+HUB_REPO_ID_ADAPTER = f"eekay/{MODEL_NAME}-dpo-adapter"  # Hub repo for LoRA adapter
+ADAPTER_PATH = None
 
 LEARNING_RATE = 6e-6
 BATCH_SIZE = 8
@@ -29,7 +28,7 @@ GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
 MAX_LENGTH = 1024
 MAX_PROMPT_LENGTH = 512
-BETA = 0.05  # DPO beta parameter (controls deviation from reference model)
+BETA = 0.01  # DPO beta parameter (controls deviation from reference model)
 WARMUP_RATIO = 0.1
 LOGGING_STEPS = 10
 SAVE_STEPS = 100
@@ -159,8 +158,8 @@ def train_dpo(
     # Initialize wandb
     if use_wandb:
         wandb.init(
-            project="mistral-dpo",
-            name="mistral-7b-instruct-dpo",
+            project=f"{MODEL_NAME}-dpo",
+            name=f"{MODEL_NAME}-dpo",
             config={
                 "model_id": MODEL_ID,
                 "learning_rate": LEARNING_RATE,
@@ -203,13 +202,6 @@ def train_dpo(
         processing_class=tokenizer,
         peft_config=peft_config,
     )
-    
-    # Test push before training (adapter only - merged requires destructive merge_and_unload)
-    if hub_repo_adapter:
-        print("Testing adapter push before training...")
-        trainer.model.push_to_hub(hub_repo_adapter, commit_message="Pre-training test (adapter)")
-        tokenizer.push_to_hub(hub_repo_adapter, commit_message="Add tokenizer")
-        print(f"Adapter test push complete: https://huggingface.co/{hub_repo_adapter}")
     
     # Train
     print("Starting DPO training...")
@@ -282,28 +274,28 @@ def merge_adapter_locally(
 # Run merge
 
 if __name__ == "__main__":
-    # # Load model and tokenizer
-    # model, tokenizer, peft_config = load_model_and_tokenizer()
+    # Load model and tokenizer
+    model, tokenizer, peft_config = load_model_and_tokenizer()
     
-    # # Load dataset
-    # dataset = load_preference_dataset()
-    # # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-pref")
+    # Load dataset
+    dataset = load_preference_dataset()
+    # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-pref")
     
-    # # Train
-    # trainer = train_dpo(
-    #     model=model,
-    #     tokenizer=tokenizer,
-    #     dataset=dataset,
-    #     peft_config=peft_config,
-    #     use_wandb=True,
-    # )
+    # Train
+    trainer = train_dpo(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        peft_config=peft_config,
+        use_wandb=True,
+    )
     
-    # print("DPO training complete!")
+    print("DPO training complete!")
 
     merged_model, tokenizer = merge_adapter_locally(
         base_model_id = MODEL_ID,
-        adapter_id = "./dpo_output/checkpoint-1500",
-        output_dir = "./merged_model",
+        adapter_id = "./dpo_output",
+        output_dir = f"./{MODEL_NAME}_dpo_merged",
         push_to_hub = True,
         hub_repo_id = HUB_REPO_ID_MERGED
     )

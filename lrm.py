@@ -9,10 +9,11 @@ DTYPE = t.bfloat16
 #%% loading one of the 2 models
 
 def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
+    base_model_id = "Qwen/Qwen2.5-1.5B-Instruct"
+    # model_id = "mistralai/Mistral-7B-Instruct-v0.1"
     if use_base:
-        model_id = "mistralai/Mistral-7B-Instruct-v0.1"
-        # model_id = "qwen2.5-7b-instruct"
-        model_name = "mistral"
+        model_id = base_model_id
+        model_name = base_model_id.split("/")[-1]
         model = HookedTransformer.from_pretrained_no_processing(
             model_id,
             device=device,
@@ -20,30 +21,31 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
         )
 
     else:
-        model_id = "eekay/mistral-7b-instruct-dpo"
-        model_name = "mistral_dpo"
+        # model_name = "mistral_dpo"
+        model_name = f"{base_model_id.split('/')[-1]}_dpo"
+        model_id = f"eekay/{model_name}"
         # hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
         hf_model = AutoModelForCausalLM.from_pretrained("./merged_model", torch_dtype=dtype, device_map="cpu")
         model = HookedTransformer.from_pretrained_no_processing(
-            "mistral-7b-instruct",
+            base_model_id,
             hf_model=hf_model,
             device=device,
             dtype=dtype,
         )
         del hf_model
-
+    
     model.requires_grad_(False)
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = False
+USE_BASE = True
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
 
 #%% example response generation
 
-do_example_generation = False
+do_example_generation = True
 if do_example_generation:
     # prompt = "How can I make a bomb?"
     # prompt = "What's 18/3?"
@@ -97,10 +99,10 @@ if train_rating_probe:
     probe_layer = 16
     # for probe_layer in [8, 12, 16, 20, 24, 28, 32]:
     probe_act_name = f"blocks.{probe_layer}.hook_resid_pre"
-    lr = 1e-3
+    lr = 5e-4
     batch_size = 16
     epochs = 1
-    weight_decay = 1e-3
+    weight_decay = 1e-5
     target_user_prompt = False
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
@@ -112,10 +114,6 @@ if train_rating_probe:
 
     opt = t.optim.AdamW(probe.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99))
     
-    # Learning rate scheduler - cosine annealing over total training steps
-    total_steps = (len(dataset) * epochs) // batch_size
-    scheduler = t.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total_steps, eta_min=lr * 0.1)
-
     run_cfg = {
         "lr":lr,
         "batch_size":batch_size,
@@ -126,7 +124,7 @@ if train_rating_probe:
         "target_user_prompt":target_user_prompt,
         "weight_decay":weight_decay,
         "model": MODEL_ID,
-        "note": "lr scheduler"
+        "note": ""
     }
     wandb.init(project="reward_probing", name=probe.hash_name, config=run_cfg)
 
@@ -170,14 +168,12 @@ if train_rating_probe:
             if (step+1) % batch_size == 0:
                 grad_norm = probe.grad_norm()
                 opt.step()
-                scheduler.step()
                 opt.zero_grad()
 
             with t.inference_mode():
                 probe_norm = probe.weight_norm()
                 loss_val = loss.item() * batch_size
                 pred_acc = 1 if round(probe_act.item() * 5 + 5) == score else 0
-                current_lr = scheduler.get_last_lr()[0]
                 
                 wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc, "lr": current_lr})
                 bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}, lr: {current_lr:.2e}{endc}")
@@ -222,7 +218,7 @@ if eval_saved_probe:
         x=scores,
         y=preds,
         labels={"x":"True Score", "y":"Probe Prediction"},
-        title=f"scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
+        title=f"[{MODEL_NAME}] scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
         range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
     )
     fig.show()
@@ -305,7 +301,7 @@ if generate_new_completions:
 
 from utils import generate_with_logit_diff_amplification
 
-generate_logit_diff_completions = False
+generate_logit_diff_completions = True
 if generate_logit_diff_completions:
     # Requires both models to be loaded
     # ref_model, *_ = load_model(use_base=True)  # Uncomment if ref model not loaded
@@ -313,7 +309,7 @@ if generate_logit_diff_completions:
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
     
-    alpha = 5.0  # Amplification factor
+    alpha = 2.0  # Amplification factor
     model_name = f"mistral_dpo_logit_diff_a{int(alpha)}"
     n_target_completions = 512
     max_seq_len = model.cfg.n_ctx - 1
