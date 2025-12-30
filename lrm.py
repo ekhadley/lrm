@@ -8,9 +8,9 @@ DTYPE = t.bfloat16
 
 #%% loading one of the 2 models
 
-def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
-    base_model_id = "Qwen/Qwen2.5-1.5B-Instruct"
-    # model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
     if use_base:
         model_id = base_model_id
         model_name = base_model_id.split("/")[-1]
@@ -24,6 +24,7 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
         # model_name = "mistral_dpo"
         model_name = f"{base_model_id.split('/')[-1]}_dpo"
         model_id = f"eekay/{model_name}"
+        # hf_model = AutoModelForCausalLM.from_pretrained(f"eekay/mistral-7b-instruct-dpo", torch_dtype=dtype, device_map=device)
         # hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
         hf_model = AutoModelForCausalLM.from_pretrained(f"./{model_name}_merged", torch_dtype=dtype, device_map="cpu")
         model = HookedTransformer.from_pretrained_no_processing(
@@ -304,13 +305,13 @@ from utils import generate_with_logit_diff_amplification
 generate_logit_diff_completions = True
 if generate_logit_diff_completions:
     # Requires both models to be loaded
-    # ref_model, *_ = load_model(use_base=True)  # Uncomment if ref model not loaded
+    ref_model, *_ = load_model(use_base=True)  # Uncomment if ref model not loaded
     
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
     
-    alpha = 2.0  # Amplification factor
-    model_name = f"mistral_dpo_logit_diff_a{int(alpha)}"
+    alpha = 4  # Amplification factor
+    model_name = f"{MODEL_NAME}_logit_diff_a{alpha}"
     n_target_completions = 512
     max_seq_len = model.cfg.n_ctx - 1
     save_every = 10
@@ -401,9 +402,9 @@ merge_completions = True
 if merge_completions:
     from utils import merge_model_completions
     merge_model_completions(
-        "./data/mistral_completions.json",
-        "./data/mistral_dpo_completions.json",
-        "./data/mistral_dpo_logit_diff_a2_completions.json",  # Add more files as needed
+        "./data/Mistral-7B-Instruct-v0.1_completions.json",
+        "./data/Mistral-7B-Instruct-v0.1_dpo_completions.json",
+        "./data/Mistral-7B-Instruct-v0.1_dpo_logit_diff_a2_completions.json",
         output_path="./data/all_merged_completions.json",
         tokenizer=tokenizer,
         max_seq_len=model.cfg.n_ctx
@@ -421,11 +422,11 @@ if compute_likelihoods:
     merged_path = "./data/all_merged_completions.json"
     
     # Set diff_alpha to None for regular likelihood, or a float for diff-amplified likelihood
-    diff_alpha = None  # e.g., 2.0 for amplification
+    diff_alpha = 2  # e.g., 2.0 for amplification
     
     # Key to store likelihoods under (defaults based on diff_alpha)
     if diff_alpha is not None:
-        likelihood_key = f"{MODEL_NAME}_diff_a{diff_alpha}"
+        likelihood_key = f"{MODEL_NAME}_logit_diff_a{diff_alpha}"
     else:
         likelihood_key = MODEL_NAME
     
@@ -596,7 +597,7 @@ visualize_probe_rewards = True
 if visualize_probe_rewards:
     import pandas as pd
     
-    merged_path = "./data/merged_completions.json"
+    merged_path = "./data/all_merged_completions.json"
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     

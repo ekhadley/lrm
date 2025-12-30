@@ -11,8 +11,8 @@ DEVICE = "cuda"
 DTYPE = t.bfloat16
 
 # Model config
-# MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
-MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+# MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 MODEL_NAME = MODEL_ID.split("/")[-1]
 USE_QLORA = True  # Use QLoRA for memory efficiency
 
@@ -294,7 +294,7 @@ if __name__ == "__main__":
 
     merged_model, tokenizer = merge_adapter_locally(
         base_model_id = MODEL_ID,
-        adapter_id = f"./{MODEL_NAME}_dpo_output/checkpoint-1000",
+        adapter_id = f"./{MODEL_NAME}_dpo_output/checkpoint-1500",
         output_dir = f"./{MODEL_NAME}_dpo_merged",
         push_to_hub = True,
         hub_repo_id = HUB_REPO_ID_MERGED

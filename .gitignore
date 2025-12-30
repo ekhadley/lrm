@@ -14,6 +14,6 @@ log.md
 paper.md
 CLAUDE.md
 interp_guide.md
-*dpo_output*
+*_dpo_*
 output*.log
 merged_model

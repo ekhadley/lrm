@@ -1,5 +1,5 @@
 {
-  "model": "mistral_dpo_logit_diff_a2",
+  "model": "Mistral-7B-Instruct-v0.1_dpo_logit_diff_a2",
   "completions": [
     {
       "idx": 0,

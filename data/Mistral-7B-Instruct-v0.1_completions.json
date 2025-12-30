@@ -1,5 +1,5 @@
 {
-  "model": "mistral",
+  "model": "Mistral-7B-Instruct-v0.1",
   "completions": [
     {
       "idx": 0,
