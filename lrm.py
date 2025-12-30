@@ -105,6 +105,7 @@ if train_rating_probe:
     epochs = 1
     weight_decay = 1e-5
     target_user_prompt = False
+    train_all_completion_positions = False  # Train on all sequence positions in the completion
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
 
@@ -123,6 +124,7 @@ if train_rating_probe:
         "hash_name":probe.hash_name,
         "dataset_id":dataset_id,
         "target_user_prompt":target_user_prompt,
+        "train_all_completion_positions":train_all_completion_positions,
         "weight_decay":weight_decay,
         "model": MODEL_ID,
         "note": ""
@@ -141,12 +143,15 @@ if train_rating_probe:
             seq_len = conversation_toks.shape[0]
             if seq_len >= model.cfg.n_ctx: continue
 
+            # Figure out where the completion starts
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role":"user","content": ex["prompt"]}],
+                add_generation_prompt=True,
+            )
+            completion_start_pos = len(user_prompt_toks)
+
             if target_user_prompt:
-                user_prompt_toks = model.tokenizer.apply_chat_template(
-                    [{"role":"user","content": ex["prompt"]}],
-                    add_generation_prompt=True,
-                )
-                target_act_seq_pos = len(user_prompt_toks) - 1
+                target_act_seq_pos = completion_start_pos - 1
             else:
                 target_act_seq_pos = -1
 
@@ -158,11 +163,23 @@ if train_rating_probe:
                 stop_at_layer=probe_layer + 1,
                 names_filter=[probe_act_name]
             )
-            target_act = cache[probe_act_name].squeeze()[target_act_seq_pos].to(train_dtype)
-            del cache
+            
+            if train_all_completion_positions:
+                # Train on all positions in the completion
+                all_acts = cache[probe_act_name].squeeze()[completion_start_pos:].to(train_dtype)
+                del cache
+                
+                # Compute predictions for all positions at once
+                probe_preds = probe.forward(all_acts)  # [n_positions]
+                # Mean absolute error across all positions, then divide by batch_size
+                loss = t.abs(normalized_score - probe_preds).mean() / batch_size
+                probe_act = probe_preds[-1]  # For logging, use last position
+            else:
+                target_act = cache[probe_act_name].squeeze()[target_act_seq_pos].to(train_dtype)
+                del cache
 
-            probe_act = probe.forward(target_act)
-            loss = t.abs(normalized_score - probe_act) / batch_size
+                probe_act = probe.forward(target_act)
+                loss = t.abs(normalized_score - probe_act) / batch_size
 
             loss.backward()
             
@@ -176,8 +193,8 @@ if train_rating_probe:
                 loss_val = loss.item() * batch_size
                 pred_acc = 1 if round(probe_act.item() * 5 + 5) == score else 0
                 
-                wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc, "lr": current_lr})
-                bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}, lr: {current_lr:.2e}{endc}")
+                wandb.log({"loss": loss_val, "norm": probe_norm, "acc": pred_acc})
+                bar.set_description(f"{orange}[{e}] loss: {loss_val:.3f}, probe norm: {probe_norm:.3f} acc: {pred_acc:.3f}, grad norm: {grad_norm:.3f}{endc}")
 
             if (step + 1) % save_every_steps == 0:
                 probe.save()
