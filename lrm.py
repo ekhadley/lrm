@@ -301,7 +301,105 @@ if generate_new_completions:
     
     t.cuda.empty_cache()
 
-#%% merging the completions from the two models into one dataset
+#%% generate completions with logit diff steering
+
+from utils import generate_with_logit_diff_amplification
+
+generate_logit_diff_completions = False
+if generate_logit_diff_completions:
+    # Requires both models to be loaded
+    # ref_model, *_ = load_model(use_base=True)  # Uncomment if ref model not loaded
+    
+    dataset_id = "eekay/ultrafeedback-balanced"
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    
+    alpha = 5.0  # Amplification factor
+    model_name = f"mistral_dpo_logit_diff_a{int(alpha)}"
+    n_target_completions = 512
+    max_seq_len = model.cfg.n_ctx - 1
+    save_every = 10
+    completions_path = f"./data/{model_name}_completions.json"
+    
+    # Load existing completions if file exists
+    os.makedirs("./data", exist_ok=True)
+    if os.path.exists(completions_path):
+        with open(completions_path, "r") as f:
+            data = json.load(f)
+            completions = {c["idx"]: c for c in data.get("completions", [])}
+    else:
+        completions = {}
+    
+    # Check if we already have enough
+    if len(completions) >= n_target_completions:
+        print(f"{green}Already have {len(completions)} completions, skipping generation{endc}")
+    else:
+        for idx in (bar := tqdm(range(len(dataset)), total=n_target_completions)):
+            if len(completions) >= n_target_completions:
+                break
+            if idx in completions:
+                continue
+            
+            ex = dataset[idx]
+            user_prompt = ex["prompt"]
+            
+            # Check if prompt alone is too long
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role": "user", "content": user_prompt}],
+                return_tensors="pt",
+                add_generation_prompt=True,
+            ).to(DEVICE)
+            user_prompt_len = user_prompt_toks.shape[-1]
+            
+            max_new_tokens = max_seq_len - user_prompt_len
+            if max_new_tokens <= 16:
+                continue  # Skip if prompt fills context
+            
+            # Generate with logit diff steering
+            try:
+                generated_text, generated_ids = generate_with_logit_diff_amplification(
+                    user_prompt=user_prompt,
+                    subject_model=model,
+                    reference_model=ref_model,
+                    tokenizer=tokenizer,
+                    alpha=alpha,
+                    max_new_tokens=max_new_tokens,
+                    verbose=False,
+                )
+            except Exception as e:
+                print(f"{red}Error generating for idx {idx}: {e}{endc}")
+                continue
+            
+            completion_len = len(generated_ids)
+            total_len = user_prompt_len + completion_len
+            
+            # Skip if hit context limit
+            if total_len >= max_seq_len - 1:
+                continue
+            
+            # Decode just the completion (skip special tokens)
+            completion_text = model.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            
+            completions[idx] = {
+                "idx": idx,
+                **dict(ex),
+                "new_response": completion_text,
+            }
+            
+            bar.set_description(f"{lime}[{len(completions)}/{n_target_completions}] generated {user_prompt_len}+{completion_len} toks{endc}")
+            
+            # Periodically save
+            if len(completions) % save_every == 0:
+                with open(completions_path, "w") as f:
+                    json.dump({"model": model_name, "completions": list(completions.values())}, f, indent=2)
+        
+        # Final save
+        with open(completions_path, "w") as f:
+            json.dump({"model": model_name, "completions": list(completions.values())}, f, indent=2)
+        print(f"{green}Saved {len(completions)} completions to {completions_path}{endc}")
+    
+    t.cuda.empty_cache()
+
+#%% merging the completions from multiple models into one dataset
 
 merge_completions = True
 if merge_completions:
@@ -309,7 +407,8 @@ if merge_completions:
     merge_model_completions(
         "./data/mistral_completions.json",
         "./data/mistral_dpo_completions.json",
-        "./data/merged_completions.json",
+        # "./data/mistral_dpo_logit_diff_a5_completions.json",  # Add more files as needed
+        output_path="./data/merged_completions.json",
         tokenizer=tokenizer,
         max_seq_len=model.cfg.n_ctx
     )

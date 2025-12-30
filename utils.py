@@ -532,18 +532,16 @@ def relabel_ultrafeedback_binarized(
 # ======================= completion merging ========================== #
 
 def merge_model_completions(
-    file1: str,
-    file2: str,
+    *files: str,
     output_path: str,
     tokenizer: AutoTokenizer | None = None,
     max_seq_len: int = 2048,
 ) -> dict:
     """
-    Merge completions from two models into a single JSON file.
+    Merge completions from multiple models into a single JSON file.
     
     Args:
-        file1: Path to first model's completions JSON file
-        file2: Path to second model's completions JSON file
+        *files: Paths to model completion JSON files (at least 2)
         output_path: Path where the merged JSON should be saved
         tokenizer: If provided, filter out completions that exceed max_seq_len when tokenized
         max_seq_len: Maximum sequence length (default 2048)
@@ -557,82 +555,97 @@ def merge_model_completions(
     
     Output format:
         {
-            "models": ["model1_name", "model2_name"],
+            "models": ["model1_name", "model2_name", ...],
             "completions": [
                 {
                     "idx": 0,
                     "prompt": "...",
                     "completions": {
                         "model1_name": {"text": "assistant response only..."},
-                        "model2_name": {"text": "..."}
+                        "model2_name": {"text": "..."},
+                        ...
                     }
                 },
                 ...
             ]
         }
     
-    Only includes examples where both models have a completion.
+    Only includes examples where ALL models have a completion.
     """
-    with open(file1, "r") as f:
-        data1 = json.load(f)
-    with open(file2, "r") as f:
-        data2 = json.load(f)
+    if len(files) < 2:
+        raise ValueError("At least 2 files must be provided for merging")
     
-    model1_name = data1.get("model", "model1")
-    model2_name = data2.get("model", "model2")
+    # Load all files
+    all_data = []
+    model_names = []
+    all_completions_by_idx = []
     
-    # Index completions by idx
-    completions1 = {c["idx"]: c for c in data1.get("completions", [])}
-    completions2 = {c["idx"]: c for c in data2.get("completions", [])}
+    for file_path in files:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        all_data.append(data)
+        model_names.append(data.get("model", f"model{len(model_names)}"))
+        # Index completions by idx
+        completions_dict = {c["idx"]: c for c in data.get("completions", [])}
+        all_completions_by_idx.append(completions_dict)
     
-    # Find common indices
-    common_indices = set(completions1.keys()) & set(completions2.keys())
+    # Find common indices across ALL models
+    common_indices = set(all_completions_by_idx[0].keys())
+    for completions_dict in all_completions_by_idx[1:]:
+        common_indices &= set(completions_dict.keys())
     
     merged_completions = []
     n_skipped_too_long = 0
     
     for idx in sorted(common_indices):
-        c1 = completions1[idx]
-        c2 = completions2[idx]
+        # Gather all completions for this idx
+        texts = []
+        prompt = None
+        skip_this = False
         
-        # new_response field contains just the model's response text (no special tokens)
-        text1 = c1.get("new_response", "")
-        text2 = c2.get("new_response", "")
-        prompt = c1.get("prompt", c2.get("prompt"))
+        for i, completions_dict in enumerate(all_completions_by_idx):
+            c = completions_dict[idx]
+            text = c.get("new_response", "")
+            texts.append(text)
+            if prompt is None:
+                prompt = c.get("prompt")
+            
+            # Filter by token length if tokenizer provided
+            if tokenizer is not None:
+                conv = [{"role": "user", "content": prompt}, {"role": "assistant", "content": text}]
+                tok_len = len(tokenizer.apply_chat_template(conv))
+                if tok_len >= max_seq_len:
+                    skip_this = True
+                    break
         
-        # Filter by token length if tokenizer provided
-        if tokenizer is not None:
-            conv1 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": text1}]
-            len1 = len(tokenizer.apply_chat_template(conv1))
-            
-            conv2 = [{"role": "user", "content": prompt}, {"role": "assistant", "content": text2}]
-            len2 = len(tokenizer.apply_chat_template(conv2))
-            
-            if len1 >= max_seq_len or len2 >= max_seq_len:
-                n_skipped_too_long += 1
-                continue
+        if skip_this:
+            n_skipped_too_long += 1
+            continue
+        
+        # Build completions dict for all models
+        completions_dict_merged = {}
+        for model_name, text in zip(model_names, texts):
+            completions_dict_merged[model_name] = {"text": text}
         
         merged_completions.append({
             "idx": idx,
             "prompt": prompt,
-            "completions": {
-                model1_name: {"text": text1},
-                model2_name: {"text": text2},
-            }
+            "completions": completions_dict_merged
         })
     
     merged_data = {
-        "models": [model1_name, model2_name],
+        "models": model_names,
         "completions": merged_completions
     }
     
     with open(output_path, "w") as f:
         json.dump(merged_data, f, indent=2)
     
-    print(f"Merged {len(merged_completions)} completions from {model1_name} and {model2_name}")
-    n_missing = len(completions1) + len(completions2) - 2*len(common_indices)
+    print(f"Merged {len(merged_completions)} completions from {len(model_names)} models: {model_names}")
+    total_original = sum(len(d) for d in all_completions_by_idx)
+    n_missing = total_original - len(model_names) * len(common_indices)
     if n_missing > 0:
-        print(f"(Skipped {n_missing} examples with missing completions)")
+        print(f"(Skipped {n_missing} examples with missing completions across models)")
     if n_skipped_too_long > 0:
         print(f"(Skipped {n_skipped_too_long} examples exceeding {max_seq_len} tokens)")
     print(f"Saved to {output_path}")
