@@ -8,8 +8,8 @@ DTYPE = t.bfloat16
 
 #%% loading one of the 2 models
 
-BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
-# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+# BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
     if use_base:
         model_id = base_model_id
@@ -39,7 +39,7 @@ def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dty
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = False
+USE_BASE = True
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
@@ -105,7 +105,7 @@ if train_rating_probe:
     epochs = 1
     weight_decay = 1e-5
     target_user_prompt = False
-    train_all_completion_positions = False  # Train on all sequence positions in the completion
+    train_all_completion_positions = True  # Train on all sequence positions in the completion
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
 
@@ -419,10 +419,13 @@ merge_completions = True
 if merge_completions:
     from utils import merge_model_completions
     merge_model_completions(
-        "./data/Mistral-7B-Instruct-v0.1_completions.json",
-        "./data/Mistral-7B-Instruct-v0.1_dpo_completions.json",
-        "./data/Mistral-7B-Instruct-v0.1_dpo_logit_diff_a2_completions.json",
-        output_path="./data/all_merged_completions.json",
+        # "./data/Mistral-7B-Instruct-v0.1_completions.json",
+        # "./data/Mistral-7B-Instruct-v0.1_dpo_completions.json",
+        # "./data/Mistral-7B-Instruct-v0.1_dpo_logit_diff_a2_completions.json",
+        # output_path="./data/all_merged_completions.json",
+        "./data/Qwen2.5-1.5B-Instruct_completions.json",
+        "./data/Qwen2.5-1.5B-Instruct_dpo_completions.json",
+        output_path="./data/qwen_completions.json",
         tokenizer=tokenizer,
         max_seq_len=model.cfg.n_ctx
     )
@@ -436,10 +439,10 @@ from utils import get_assistant_response_logprob_sum, get_assistant_response_log
 
 compute_likelihoods = True
 if compute_likelihoods:
-    merged_path = "./data/all_merged_completions.json"
+    merged_path = "./data/qwen_completions.json"
     
     # Set diff_alpha to None for regular likelihood, or a float for diff-amplified likelihood
-    diff_alpha = 2  # e.g., 2.0 for amplification
+    diff_alpha = None  # e.g., 2.0 for amplification
     
     # Key to store likelihoods under (defaults based on diff_alpha)
     if diff_alpha is not None:
@@ -505,8 +508,12 @@ from utils import LinearProbe
 
 compute_probe_rewards = True
 if compute_probe_rewards:
-    merged_path = "./data/all_merged_completions.json"
-    probe_hash = "8034c7a96c75"
+    merged_path = "./data/qwen_completions.json"
+    mistral_dpo_probe_hash = "8034c7a96c75"
+    qwen_dpo_probe_hash = "68dd0ef91688"
+    
+    # probe_hash = mistral_dpo_probe_hash
+    probe_hash = qwen_dpo_probe_hash
     
     # Load merged completions
     with open(merged_path, "r") as f:
@@ -614,7 +621,7 @@ visualize_probe_rewards = True
 if visualize_probe_rewards:
     import pandas as pd
     
-    merged_path = "./data/all_merged_completions.json"
+    merged_path = "./data/qwen_completions.json"
     with open(merged_path, "r") as f:
         merged_data = json.load(f)
     
