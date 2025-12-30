@@ -23,7 +23,7 @@ HUB_REPO_ID_ADAPTER = f"eekay/{MODEL_NAME}-dpo-adapter"  # Hub repo for LoRA ada
 ADAPTER_PATH = None
 
 LEARNING_RATE = 6e-6
-BATCH_SIZE = 8
+BATCH_SIZE = 6
 GRADIENT_ACCUMULATION_STEPS = 4
 NUM_TRAIN_EPOCHS = 1
 MAX_LENGTH = 1024
@@ -275,26 +275,26 @@ def merge_adapter_locally(
 
 if __name__ == "__main__":
     # Load model and tokenizer
-    model, tokenizer, peft_config = load_model_and_tokenizer()
+    # model, tokenizer, peft_config = load_model_and_tokenizer()
     
-    # Load dataset
-    dataset = load_preference_dataset()
-    # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-pref")
+    # # Load dataset
+    # dataset = load_preference_dataset()
+    # # dataset = load_preference_dataset(dataset="eekay/ultrafeedback-binarized-pref")
     
-    # Train
-    trainer = train_dpo(
-        model=model,
-        tokenizer=tokenizer,
-        dataset=dataset,
-        peft_config=peft_config,
-        use_wandb=True,
-    )
+    # # Train
+    # trainer = train_dpo(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     dataset=dataset,
+    #     peft_config=peft_config,
+    #     use_wandb=True,
+    # )
     
-    print("DPO training complete!")
+    # print("DPO training complete!")
 
     merged_model, tokenizer = merge_adapter_locally(
         base_model_id = MODEL_ID,
-        adapter_id = "./dpo_output",
+        adapter_id = f"./{MODEL_NAME}_dpo_output/checkpoint-1000",
         output_dir = f"./{MODEL_NAME}_dpo_merged",
         push_to_hub = True,
         hub_repo_id = HUB_REPO_ID_MERGED

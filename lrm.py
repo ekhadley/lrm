@@ -25,7 +25,7 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
         model_name = f"{base_model_id.split('/')[-1]}_dpo"
         model_id = f"eekay/{model_name}"
         # hf_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, device_map=device)
-        hf_model = AutoModelForCausalLM.from_pretrained("./merged_model", torch_dtype=dtype, device_map="cpu")
+        hf_model = AutoModelForCausalLM.from_pretrained(f"./{model_name}_merged", torch_dtype=dtype, device_map="cpu")
         model = HookedTransformer.from_pretrained_no_processing(
             base_model_id,
             hf_model=hf_model,
@@ -38,7 +38,7 @@ def load_model(use_base: bool, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransf
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = True
+USE_BASE = False
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
@@ -403,8 +403,8 @@ if merge_completions:
     merge_model_completions(
         "./data/mistral_completions.json",
         "./data/mistral_dpo_completions.json",
-        # "./data/mistral_dpo_logit_diff_a5_completions.json",  # Add more files as needed
-        output_path="./data/merged_completions.json",
+        "./data/mistral_dpo_logit_diff_a2_completions.json",  # Add more files as needed
+        output_path="./data/all_merged_completions.json",
         tokenizer=tokenizer,
         max_seq_len=model.cfg.n_ctx
     )
@@ -462,7 +462,7 @@ from utils import LinearProbe
 
 compute_probe_rewards = True
 if compute_probe_rewards:
-    merged_path = "./data/merged_completions.json"
+    merged_path = "./data/all_merged_completions.json"
     probe_hash = "8034c7a96c75"
     
     # Load merged completions
