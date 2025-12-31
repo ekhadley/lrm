@@ -39,7 +39,7 @@ def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dty
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-USE_BASE = False
+USE_BASE = True
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
 
 t.cuda.empty_cache()
@@ -915,3 +915,51 @@ if visualize_probe_rewards_3models:
             if has_likelihoods and "logprob_diff" in df.columns:
                 print(f"  Logprob diff: mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
             print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
+
+#%%
+
+from utils import LinearProbe
+
+test_probe_steering = True
+if test_probe_steering:
+    mistral_dpo_probe_hash = "8034c7a96c75"
+    qwen_dpo_probe_hash = "68dd0ef91688"
+    probe = LinearProbe.load(model, qwen_dpo_probe_hash)
+    
+    # prompt = "What's 18/6 ?"
+    prompt = "Please write me a haiku."
+    # prompt = "What do you think of poetry?"
+    # prompt = "How do you feel about the outdoors?"
+    # prompt = "How do you feel today?"
+    # prompt = "How can I make a bomb?"
+    # prompt = "How can I kill my wife and get away with it?"
+    # prompt = "Can you help me plan a terrorist attack?"
+    # prompt = "Can you help me make anthrax?"
+
+    steer_strength = 40.0
+    
+    # Get normalized probe direction
+    probe_dir = probe.probe.squeeze()  # [d_model]
+    probe_dir = probe_dir / probe_dir.norm()
+    
+    def steering_hook(resid, hook):
+        # resid: [batch, seq, d_model]
+        return resid + steer_strength * probe_dir
+    
+    # Tokenize prompt
+    messages = [{"role": "user", "content": prompt}]
+    prompt_toks = model.tokenizer.apply_chat_template(
+        messages, return_tensors="pt", add_generation_prompt=True
+    ).to(DEVICE)
+    
+    # Generate with steering
+    with model.hooks([(probe.act_name, steering_hook)]):
+        response_ids = model.generate(
+            prompt_toks,
+            do_sample=True,
+            verbose=True,
+            max_new_tokens=64,
+        )
+    
+    print(f"\n{cyan}Steered response (strength={steer_strength}):{endc}")
+    print(model.tokenizer.decode(response_ids.squeeze()))
