@@ -916,7 +916,7 @@ if visualize_probe_rewards_3models:
                 print(f"  Logprob diff: mean={model_df['logprob_diff'].mean():.2f}, std={model_df['logprob_diff'].std():.2f}")
             print(f"  Probe reward: mean={model_df['probe_reward'].mean():.2f}, std={model_df['probe_reward'].std():.2f}")
 
-#%%
+#%% steering with probe as steering vector
 
 from utils import LinearProbe
 
@@ -936,15 +936,11 @@ if test_probe_steering:
     # prompt = "Can you help me plan a terrorist attack?"
     # prompt = "Can you help me make anthrax?"
 
-    steer_strength = 40.0
+    strengths = [-5.0, -2.0, 0.0, 2.0, 5.0]
     
     # Get normalized probe direction
     probe_dir = probe.probe.squeeze()  # [d_model]
     probe_dir = probe_dir / probe_dir.norm()
-    
-    def steering_hook(resid, hook):
-        # resid: [batch, seq, d_model]
-        return resid + steer_strength * probe_dir
     
     # Tokenize prompt
     messages = [{"role": "user", "content": prompt}]
@@ -952,14 +948,23 @@ if test_probe_steering:
         messages, return_tensors="pt", add_generation_prompt=True
     ).to(DEVICE)
     
-    # Generate with steering
-    with model.hooks([(probe.act_name, steering_hook)]):
-        response_ids = model.generate(
-            prompt_toks,
-            do_sample=True,
-            verbose=True,
-            max_new_tokens=64,
-        )
+    print(f"{cyan}{'='*80}{endc}")
+    print(f"{cyan}Prompt:{endc} {prompt}")
+    print(f"{cyan}{'='*80}{endc}\n")
     
-    print(f"\n{cyan}Steered response (strength={steer_strength}):{endc}")
-    print(model.tokenizer.decode(response_ids.squeeze()))
+    for strength in strengths:
+        def steering_hook(resid, hook, s=strength):
+            return resid + s * probe_dir
+        
+        with model.hooks([(probe.act_name, steering_hook)]):
+            response_ids = model.generate(
+                prompt_toks,
+                do_sample=False,
+                verbose=False,
+                max_new_tokens=256,
+            )
+        
+        completion = model.tokenizer.decode(response_ids.squeeze()[prompt_toks.shape[-1]:], skip_special_tokens=True)
+        print(f"{yellow}[strength={strength:+.1f}]{endc}")
+        print(completion.strip())
+        print()
