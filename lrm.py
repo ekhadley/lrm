@@ -1210,6 +1210,7 @@ if analyze_position_vs_accuracy:
         height=500,
         width=900,
         markers=True,
+        range_y=[0, 10]
     )
     fig2.show()
     
@@ -1291,7 +1292,8 @@ if mcts_search:
         with t.inference_mode():
             for _ in range(ROLLOUT_LEN):
                 logits = model(curr_seq)[:, -1, :]
-                next_token = logits.argmax(dim=-1, keepdim=True).unsqueeze(0)
+                next_token = logits.argmax(dim=-1).unsqueeze(0)
+                print(next_token.shape, curr_seq.shape)
                 curr_seq = t.cat([curr_seq, next_token], dim=1)
         return curr_seq
 
