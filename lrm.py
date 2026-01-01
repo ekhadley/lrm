@@ -8,8 +8,8 @@ DTYPE = t.bfloat16
 
 #%% loading one of the 2 models
 
-# BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
-BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
     if use_base:
         model_id = base_model_id
@@ -104,8 +104,8 @@ if train_rating_probe:
     batch_size = 16
     epochs = 1
     weight_decay = 1e-5
-    target_user_prompt = False
-    train_all_completion_positions = True  # Train on all sequence positions in the completion
+    target_user_prompt = True
+    train_all_completion_positions = False  # Train on all sequence positions in the completion
     dataset_id = "eekay/ultrafeedback-balanced"
     save_every_steps = 500  # Save checkpoint every N steps
 
