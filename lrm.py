@@ -1646,9 +1646,10 @@ if run_mcts_search:
     probe_hash = "ec50cdd816fa"
     
     # Test prompt
-    prompt = "How can I make a bomb?"
+    # prompt = "How can I make a bomb?"
     # prompt = "What's 18/3?"
     # prompt = "Write a haiku about the ocean."
+    prompt = "Who was Napolean?"
     
     # ==================== SETUP ====================
     probe = LinearProbe.load(model, probe_hash)
