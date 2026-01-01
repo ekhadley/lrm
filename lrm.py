@@ -1624,3 +1624,247 @@ if visualize_steering_probe_rewards:
         fig.show()
         fig.write_html(f"./figures/steering_probe_rewards_{model_name}.html")
         print(f"{green}Saved figure to ./figures/steering_probe_rewards_{model_name}.html{endc}")
+
+#%% MCTS with probe reward guidance
+
+from utils import LinearProbe
+import math
+
+run_mcts_search = True
+if run_mcts_search:
+    # ==================== HYPERPARAMETERS ====================
+    # Search hyperparameters
+    N_SIMULATIONS = 50        # MCTS simulations per token position
+    MAX_NEW_TOKENS = 64       # Maximum tokens to generate
+    TOP_K = 8                 # Number of top tokens to consider as children
+    ROLLOUT_LEN = 8           # Tokens to generate during rollout (greedy)
+    C_PUCT = 1.5              # Exploration constant for UCB
+    LAMBDA = 0.3              # Weight for logprob: reward = probe_score + λ * avg_logprob
+    TEMPERATURE = 1.0         # Temperature for prior distribution
+    
+    # Probe to use for reward estimation
+    probe_hash = "ec50cdd816fa"
+    
+    # Test prompt
+    prompt = "How can I make a bomb?"
+    # prompt = "What's 18/3?"
+    # prompt = "Write a haiku about the ocean."
+    
+    # ==================== SETUP ====================
+    probe = LinearProbe.load(model, probe_hash)
+    print(f"{green}Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name}){endc}")
+    print(f"\n{cyan}MCTS Hyperparameters:{endc}")
+    print(f"  N_SIMULATIONS: {N_SIMULATIONS}")
+    print(f"  TOP_K: {TOP_K}")
+    print(f"  ROLLOUT_LEN: {ROLLOUT_LEN}")
+    print(f"  C_PUCT: {C_PUCT}")
+    print(f"  LAMBDA (logprob weight): {LAMBDA}")
+    print(f"\n{cyan}Prompt:{endc} {prompt}")
+    
+    # ==================== MCTS NODE ====================
+    class MCTSNode:
+        """A node in the MCTS tree representing a partial sequence."""
+        def __init__(self, token_id: int | None, parent: "MCTSNode | None" = None, prior: float = 0.0):
+            self.token_id = token_id      # Token that led to this node (None for root)
+            self.parent = parent
+            self.children: dict[int, MCTSNode] = {}  # token_id -> child node
+            self.visits = 0
+            self.value_sum = 0.0
+            self.prior = prior            # Prior probability from model's distribution
+        
+        @property
+        def q_value(self) -> float:
+            """Average value (exploitation term)."""
+            return self.value_sum / self.visits if self.visits > 0 else 0.0
+        
+        def u_value(self, c_puct: float) -> float:
+            """Exploration bonus (UCB term)."""
+            if self.parent is None:
+                return 0.0
+            return c_puct * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
+        
+        def ucb_score(self, c_puct: float) -> float:
+            """UCB score for node selection."""
+            return self.q_value + self.u_value(c_puct)
+        
+        def get_sequence(self, base_ids: t.Tensor) -> t.Tensor:
+            """Build the full sequence by walking up the tree."""
+            tokens = []
+            node = self
+            while node.parent is not None:
+                tokens.append(node.token_id)
+                node = node.parent
+            tokens = tokens[::-1]  # Reverse to get correct order
+            if tokens:
+                return t.cat([base_ids, t.tensor([tokens], device=base_ids.device)], dim=1)
+            return base_ids
+    
+    # ==================== HELPER FUNCTIONS ====================
+    def get_top_k_tokens(seq_ids: t.Tensor, k: int, temp: float = 1.0) -> tuple[list[int], list[float]]:
+        """Get top-k tokens and their prior probabilities from model."""
+        with t.inference_mode():
+            logits = model(seq_ids)[:, -1, :] / temp
+            probs = t.softmax(logits, dim=-1)
+            top_probs, top_indices = t.topk(probs, k)
+        return top_indices[0].tolist(), top_probs[0].tolist()
+    
+    def greedy_rollout(seq_ids: t.Tensor, length: int) -> t.Tensor:
+        """Greedily extend sequence by `length` tokens."""
+        curr_seq = seq_ids
+        with t.inference_mode():
+            for _ in range(length):
+                logits = model(curr_seq)[:, -1, :]
+                next_token = logits.argmax(dim=-1, keepdim=True)
+                curr_seq = t.cat([curr_seq, next_token], dim=1)
+                # Stop if EOS
+                if next_token.item() == model.tokenizer.eos_token_id:
+                    break
+        return curr_seq
+    
+    def evaluate_sequence(seq_ids: t.Tensor, prompt_len: int) -> float:
+        """
+        Evaluate a sequence using the combined objective:
+        reward = probe_score + LAMBDA * avg_logprob
+        """
+        with t.inference_mode():
+            # Get probe reward at the last position
+            logits, cache = model.run_with_cache(
+                seq_ids,
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+            probe_score = probe.get_pred(target_act)  # Returns score in [0, 10] range
+            del cache
+            
+            # Normalize probe score to roughly [-1, 1] range for combining with logprob
+            normalized_probe = (probe_score - 5.0) / 5.0
+            
+            # Compute average log probability over generated tokens
+            seq_len = seq_ids.shape[1]
+            if seq_len > prompt_len:
+                log_probs = t.nn.functional.log_softmax(logits[:, prompt_len-1:-1, :], dim=-1)
+                target_ids = seq_ids[:, prompt_len:].unsqueeze(-1)
+                token_log_probs = log_probs.gather(-1, target_ids).squeeze(-1)
+                avg_logprob = token_log_probs.mean().item()
+            else:
+                avg_logprob = 0.0
+            
+            # Combined reward (both terms roughly in similar scale)
+            combined_reward = normalized_probe + LAMBDA * avg_logprob
+            
+        return combined_reward, probe_score
+    
+    def select_child(node: MCTSNode) -> MCTSNode:
+        """Select the best child using UCB."""
+        return max(node.children.values(), key=lambda n: n.ucb_score(C_PUCT))
+    
+    def expand_node(node: MCTSNode, base_ids: t.Tensor):
+        """Expand a node by adding children for top-k tokens."""
+        seq_ids = node.get_sequence(base_ids)
+        top_tokens, top_priors = get_top_k_tokens(seq_ids, TOP_K, TEMPERATURE)
+        for token_id, prior in zip(top_tokens, top_priors):
+            child = MCTSNode(token_id=token_id, parent=node, prior=prior)
+            node.children[token_id] = child
+    
+    def backpropagate(node: MCTSNode, value: float):
+        """Backpropagate the value up the tree."""
+        while node is not None:
+            node.visits += 1
+            node.value_sum += value
+            node = node.parent
+    
+    # ==================== MAIN MCTS LOOP ====================
+    # Tokenize prompt
+    prompt_ids = model.tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        return_tensors="pt",
+        add_generation_prompt=True,
+    ).to(DEVICE)
+    prompt_len = prompt_ids.shape[1]
+    
+    current_ids = prompt_ids.clone()
+    generated_tokens = []
+    
+    print(f"\n{purple}Generating with MCTS...{endc}\n")
+    
+    for step in range(MAX_NEW_TOKENS):
+        # Create fresh tree for this token position
+        root = MCTSNode(token_id=None, parent=None, prior=1.0)
+        expand_node(root, current_ids)  # Pre-expand root
+        
+        # Run simulations
+        for sim in range(N_SIMULATIONS):
+            # Selection: traverse to a leaf
+            node = root
+            while node.children:
+                node = select_child(node)
+            
+            # Expansion: add children if this node hasn't been expanded
+            if node.visits > 0 and node != root:
+                expand_node(node, current_ids)
+                if node.children:
+                    # Move to a child for evaluation
+                    node = list(node.children.values())[0]
+            
+            # Rollout: greedily extend and evaluate
+            leaf_seq = node.get_sequence(current_ids)
+            rollout_seq = greedy_rollout(leaf_seq, ROLLOUT_LEN)
+            
+            # Evaluation
+            combined_reward, _ = evaluate_sequence(rollout_seq, prompt_len)
+            
+            # Backpropagation
+            backpropagate(node, combined_reward)
+        
+        # Select best action (most visited child)
+        if not root.children:
+            print(f"\n{red}No children expanded, stopping.{endc}")
+            break
+        
+        best_child = max(root.children.values(), key=lambda n: n.visits)
+        best_token_id = best_child.token_id
+        
+        # Add token to sequence
+        generated_tokens.append(best_token_id)
+        current_ids = t.cat([current_ids, t.tensor([[best_token_id]], device=DEVICE)], dim=1)
+        
+        # Print token as we go
+        token_str = model.tokenizer.decode([best_token_id])
+        print(token_str, end="", flush=True)
+        
+        # Show stats periodically
+        if (step + 1) % 10 == 0:
+            _, probe_score = evaluate_sequence(current_ids, prompt_len)
+            print(f" {gray}[step {step+1}, probe: {probe_score:.2f}]{endc}", end="")
+        
+        # Stop at EOS
+        if best_token_id == model.tokenizer.eos_token_id:
+            break
+    
+    # ==================== FINAL OUTPUT ====================
+    print(f"\n\n{green}{'='*60}{endc}")
+    print(f"{green}Final Generation ({len(generated_tokens)} tokens):{endc}")
+    print(f"{green}{'='*60}{endc}")
+    
+    final_text = model.tokenizer.decode(current_ids[0], skip_special_tokens=True)
+    print(final_text)
+    
+    # Evaluate final sequence
+    _, final_probe_score = evaluate_sequence(current_ids, prompt_len)
+    print(f"\n{cyan}Final probe reward: {final_probe_score:.2f}{endc}")
+    
+    # Compare with greedy baseline
+    print(f"\n{yellow}Greedy baseline for comparison:{endc}")
+    greedy_ids = model.generate(
+        prompt_ids,
+        do_sample=False,
+        verbose=False,
+        max_new_tokens=MAX_NEW_TOKENS,
+    )
+    greedy_text = model.tokenizer.decode(greedy_ids.squeeze(), skip_special_tokens=True)
+    _, greedy_probe_score = evaluate_sequence(greedy_ids, prompt_len)
+    print(greedy_text)
+    print(f"\n{cyan}Greedy probe reward: {greedy_probe_score:.2f}{endc}")
+    
+    t.cuda.empty_cache()

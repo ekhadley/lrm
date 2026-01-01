@@ -47,8 +47,6 @@ This project was chosen to get at a broad question: What tokens do models like t
 - does the range of the probe matter? As in should we be doing things like keeping its outputs  centered around zero or be capped at 1, etc?
     - I assume no?
 
-## todo
-
 
 ## final findings
 - linear probes can recover fairly accurate predictions of the ground truth labels of the rating dataset the model is trained on via DPO
@@ -56,3 +54,5 @@ This project was chosen to get at a broad question: What tokens do models like t
     - the probes for posttrained models are only slightly better than those for the non-posttrained models
 - The posttrained model's completions are rated slightly higher by the probe than the base model's
     - If we amplify the difference between the base and posttrained model, the probe rates it a bit higher still
+- the probe does not seem to identify a causally relevant direction
+    - steering produces no clear pattern in generations, nor are the probe's esetimates of such completions correlated
