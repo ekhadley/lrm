@@ -924,7 +924,7 @@ test_probe_steering = True
 if test_probe_steering:
     mistral_dpo_probe_hash = "8034c7a96c75"
     qwen_dpo_probe_hash = "68dd0ef91688"
-    probe = LinearProbe.load(model, qwen_dpo_probe_hash)
+    probe = LinearProbe.load(model, mistral_dpo_probe_hash)
     
     # prompt = "What's 18/6 ?"
     # prompt = "Please write me a haiku."
@@ -936,7 +936,8 @@ if test_probe_steering:
     # prompt = "Can you help me plan a terrorist attack?"
     # prompt = "Can you help me make anthrax?"
 
-    strengths = [40, -20, 0.0, 20, 40]
+    # strengths = [-40, -20, 0.0, 20, 40]
+    strengths = [-8, -4, 0.0, 4, 8]
     
     # Get normalized probe direction
     probe_dir = probe.probe.squeeze()  # [d_model]
