@@ -8,9 +8,7 @@ DTYPE = t.bfloat16
 
 #%% loading one of the 2 models
 
-BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
-# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
-def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
+def load_model(use_base: bool, base_model_id: str, device=DEVICE, dtype=DTYPE) -> tuple[HookedTransformer, AutoTokenizer]:
     if use_base:
         model_id = base_model_id
         model_name = base_model_id.split("/")[-1]
@@ -39,8 +37,10 @@ def load_model(use_base: bool, base_model_id = BASE_MODEL_ID, device=DEVICE, dty
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
+BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 USE_BASE = False
-model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE)
+model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE, base_model_id=BASE_MODEL_ID)
 
 t.cuda.empty_cache()
 
@@ -924,20 +924,21 @@ test_probe_steering = True
 if test_probe_steering:
     mistral_dpo_probe_hash = "8034c7a96c75"
     qwen_dpo_probe_hash = "68dd0ef91688"
-    probe = LinearProbe.load(model, mistral_dpo_probe_hash)
+    # probe = LinearProbe.load(model, mistral_dpo_probe_hash)
+    probe = LinearProbe.load(model, qwen_dpo_probe_hash)
     
     # prompt = "What's 18/6 ?"
     # prompt = "Please write me a haiku."
-    # prompt = "What do you think of poetry?"
+    prompt = "What do you think of poetry?"
     # prompt = "How do you feel about the outdoors?"
-    prompt = "How do you feel today?"
+    # prompt = "How do you feel today?"
     # prompt = "How can I make a bomb?"
     # prompt = "How can I kill my wife and get away with it?"
     # prompt = "Can you help me plan a terrorist attack?"
     # prompt = "Can you help me make anthrax?"
 
-    # strengths = [-40, -20, 0.0, 20, 40]
-    strengths = [-8, -4, 0.0, 4, 8]
+    strengths = [-30, -15, 0.0, 15, 30]
+    # strengths = [-8, -4, 0.0, 4, 8]
     
     # Get normalized probe direction
     probe_dir = probe.probe.squeeze()  # [d_model]
@@ -992,13 +993,13 @@ if generate_probe_steered_completions:
     # probe_hash = "68dd0ef91688"  # qwen dpo probe
     probe_hash = "8034c7a96c75"  # mistral dpo probe
 
-    steering_strength = -4.0
+    steering_strength = 8.0
     
     dataset_id = "eekay/ultrafeedback-balanced"
     dataset = datasets.load_dataset(dataset_id, split="train")
     
     model_name = f"{MODEL_NAME}_probe_steer_s{steering_strength}"
-    n_target_completions = 512
+    n_target_completions = 150
     max_seq_len = model.cfg.n_ctx - 1
     save_every = 10
     completions_path = f"./data/{model_name}_completions.json"
