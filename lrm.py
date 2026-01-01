@@ -1188,7 +1188,7 @@ if analyze_position_vs_accuracy:
         height=600,
         width=1000,
         opacity=0.3,
-        range_y=[0, 20],
+        range_y=[0, 12],
     )
     fig.show()
     
@@ -1210,6 +1210,7 @@ if analyze_position_vs_accuracy:
         height=500,
         width=900,
         markers=True,
+        range_y=[0, 10]
     )
     fig2.show()
     
