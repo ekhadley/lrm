@@ -1083,7 +1083,7 @@ if analyze_position_vs_accuracy:
     import pandas as pd
     
     # Configuration
-    probe_hash = "68dd0ef91688"  # qwen dpo probe
+    probe_hash = "ec50cdd816fa"  # qwen dpo probe
     dataset_id = "eekay/ultrafeedback-balanced"
     n_samples = 100  # Fewer samples since we're doing per-position analysis
     
