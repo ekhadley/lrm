@@ -1167,6 +1167,7 @@ if analyze_position_vs_accuracy:
         height=600,
         width=1000,
         opacity=0.3,
+        range_y=[0, 20],
     )
     fig.show()
     
