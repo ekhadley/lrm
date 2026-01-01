@@ -1147,7 +1147,7 @@ if analyze_position_vs_accuracy:
         if sample_one_position_per_seq:
             pos = random.randint(start_pos, seq_len - 1)
             pred_score = all_preds[pos].item()
-            error = abs(pred_score - true_score)
+            error = pred_score - true_score
             positions.append(pos - start_pos)  # Offset so 0 = completion start
             errors.append(error)
             example_ids.append(i)
@@ -1155,7 +1155,7 @@ if analyze_position_vs_accuracy:
         else:
             for pos in range(start_pos, seq_len):
                 pred_score = all_preds[pos].item()
-                error = abs(pred_score - true_score)
+                error = pred_score - true_score
                 positions.append(pos - start_pos)  # Offset so 0 = completion start
                 errors.append(error)
                 example_ids.append(i)
@@ -1180,7 +1180,7 @@ if analyze_position_vs_accuracy:
         color_continuous_scale="Viridis",
         labels={
             "position": "Sequence Position",
-            "probe_error": "Probe Error (|pred - true|)",
+            "probe_error": "Probe Error (pred - true)",
             "true_score": "True Score",
         },
         title=f"Sequence Position vs Probe Error (probe: {probe.hash_name}, n_examples={n_samples})",
@@ -1188,7 +1188,6 @@ if analyze_position_vs_accuracy:
         height=600,
         width=1000,
         opacity=0.3,
-        range_y=[0, 12],
     )
     fig.show()
     
