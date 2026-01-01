@@ -1025,7 +1025,7 @@ if analyze_seq_len_vs_error:
             
             pred_score = probe.get_pred(target_act)
         
-        probe_error = abs(pred_score - true_score)
+        probe_error = pred_score - true_score
         
         seq_lengths.append(seq_len)
         probe_errors.append(probe_error)
@@ -1051,7 +1051,7 @@ if analyze_seq_len_vs_error:
         color_continuous_scale="Viridis",
         labels={
             "seq_len": "Sequence Length (tokens)",
-            "probe_error": "Probe Error (|pred - true|)",
+            "probe_error": "Probe Error (pred - true)",
             "true_score": "True Score",
         },
         title=f"Sequence Length vs Probe Error (probe: {probe.hash_name}, n={len(df)})",
