@@ -37,8 +37,8 @@ def load_model(use_base: bool, base_model_id: str, device=DEVICE, dtype=DTYPE) -
     t.cuda.empty_cache()
     return model, model.tokenizer, model_id, model_name
 
-BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
-# BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+# BASE_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 USE_BASE = False
 model, tokenizer, MODEL_ID, MODEL_NAME = load_model(USE_BASE, base_model_id=BASE_MODEL_ID)
 
@@ -1727,12 +1727,14 @@ if run_mcts_search:
         reward = probe_score + LAMBDA * avg_logprob
         """
         with t.inference_mode():
-            # Get probe reward at the last position
+            # Full forward pass to get both logits and activations
             logits, cache = model.run_with_cache(
                 seq_ids,
-                stop_at_layer=probe.layer + 1,
                 names_filter=[probe.act_name]
             )
+            # logits shape: [1, seq_len, vocab_size]
+            
+            # Get probe reward at the last position
             target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
             probe_score = probe.get_pred(target_act)  # Returns score in [0, 10] range
             del cache
@@ -1743,9 +1745,13 @@ if run_mcts_search:
             # Compute average log probability over generated tokens
             seq_len = seq_ids.shape[1]
             if seq_len > prompt_len:
-                log_probs = t.nn.functional.log_softmax(logits[:, prompt_len-1:-1, :], dim=-1)
-                target_ids = seq_ids[:, prompt_len:].unsqueeze(-1)
-                token_log_probs = log_probs.gather(-1, target_ids).squeeze(-1)
+                # logits at position i predicts token i+1
+                # So for tokens at positions prompt_len to seq_len-1, we use logits from prompt_len-1 to seq_len-2
+                prediction_logits = logits[:, prompt_len-1:-1, :]  # [1, n_gen_tokens, vocab]
+                target_ids = seq_ids[:, prompt_len:]  # [1, n_gen_tokens]
+                
+                log_probs = t.nn.functional.log_softmax(prediction_logits, dim=-1)
+                token_log_probs = log_probs.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)  # [1, n_gen_tokens]
                 avg_logprob = token_log_probs.mean().item()
             else:
                 avg_logprob = 0.0
