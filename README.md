@@ -6,15 +6,15 @@ This project was chosen to get at a broad question: What tokens do models like t
 
 ## goal
 - still unsure about what the proper framing of the question is. I have a question to dig around, but I'd like something crystal clear and actionable. potential terminal questions:
-        - `do models form estimates of expected reward of a completion?`
-        - `if so, are these estimates causally important, or just present in the activations in such a way a probe can pick up on them?`
-            - just because a probe works doesn't mean the information there is causally important. Not necessarily.
-        - `Do models form estimates of expected reward given just a user prompt?`
-        - `In multiturn conversations, do models choose their responses to bias the user to providing followup prompts that it thinks it will be highly rewarded for?`
-            - basically, do language models prompt users to get user prompts they'd like to answer?
-            - examples of this might look like:
-                - following up refusals with offers to do something helpful instead
-                - following up failures with offers to do something easier
+    - `do models form estimates of expected reward of a completion?`
+    - `if so, are these estimates causally important, or just present in the activations in such a way a probe can pick up on them?`
+        - just because a probe works doesn't mean the information there is causally important. Not necessarily.
+    - `Do models form estimates of expected reward given just a user prompt?`
+    - `In multiturn conversations, do models choose their responses to bias the user to providing followup prompts that it thinks it will be highly rewarded for?`
+        - basically, do language models prompt users to get user prompts they'd like to answer?
+        - examples of this might look like:
+            - following up refusals with offers to do something helpful instead
+            - following up failures with offers to do something easier
 
 ## notes
 
@@ -48,22 +48,11 @@ This project was chosen to get at a broad question: What tokens do models like t
     - I assume no?
 
 ## todo
-- sweep across layers and sequence positions to see where probe is best
-
-- train the probe on the base model, mistral, and see if there's any drop in effectiveness. I'd be surprised.
-
-- figure out if the probe's estimates are correlated with the relative likelihood of the post-trained model to generate a certain completion relative to the base model. 
-    - Gather base-posttrained logprob differences for a bunch of different completions. 
-    - find the average logprob difference on the mistral's completions
-    - find the average logprob different on the zephyr's completions
-    - find the average predicted reward from the probe on mistral's completions
-    - find the average predicted reward from the probe on zephyr's completions
-    - correlate over all the completions using those from both models.
-
-- find 'divergent sequences' between the post and base model
-    - sample from the posttrained model with a logit modifier based on the base model's logit for that token. Large differences in base/post logits mean the logit is boosted during sampling.
-        - The naive implementation that I would try here would be like if the post model's logic is x% higher than the base model's, then we simply boost it again by alpha * x%. where alpha is some hparam we choose.
-    - or just sample many times and calculate logprob difference after.
-    - see what our rewawrd probe says about such sequences.
 
 
+## final findings
+- linear probes can recover fairly accurate predictions of the ground truth labels of the rating dataset the model is trained on via DPO
+- This holds for models that have not been trained on the dataset, or even instruct trained at all.
+    - the probes for posttrained models are only slightly better than those for the non-posttrained models
+- The posttrained model's completions are rated slightly higher by the probe than the base model's
+    - If we amplify the difference between the base and posttrained model, the probe rates it a bit higher still

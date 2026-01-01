@@ -966,7 +966,19 @@ if test_probe_steering:
             )
         
         completion = model.tokenizer.decode(response_ids.squeeze()[prompt_toks.shape[-1]:], skip_special_tokens=True)
-        print(f"{yellow}[strength={strength:+.1f}]{endc}")
+        
+        # Get probe reward estimate for this completion (without steering)
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                response_ids.squeeze(),
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            completion_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+            del cache
+            probe_reward = probe.get_pred(completion_act)
+        
+        print(f"{yellow}[strength={strength:+.1f}]{endc} {cyan}(probe reward: {probe_reward:.2f}){endc}")
         print(completion.strip())
         print()
 
