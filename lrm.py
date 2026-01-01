@@ -1087,6 +1087,7 @@ if analyze_position_vs_accuracy:
     dataset_id = "eekay/ultrafeedback-balanced"
     n_samples = 100  # Fewer samples since we're doing per-position analysis
     sample_one_position_per_seq = False  # If True, sample one random position per sequence
+    position_from_completion_start = True  # If True, position 0 = start of assistant completion
     
     # Load probe and dataset
     probe = LinearProbe.load(model, probe_hash)
@@ -1118,6 +1119,16 @@ if analyze_position_vs_accuracy:
         
         true_score = ex["score"]
         
+        # Compute completion start position if needed
+        if position_from_completion_start:
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role": "user", "content": ex["prompt"]}],
+                add_generation_prompt=True,
+            )
+            completion_start_pos = len(user_prompt_toks)
+        else:
+            completion_start_pos = 0
+        
         # Get activations at all positions
         with t.inference_mode():
             _, cache = model.run_with_cache(
@@ -1132,19 +1143,20 @@ if analyze_position_vs_accuracy:
             all_preds = probe.forward(all_acts) * 5 + 5  # [seq_len]
         
         # Record error at each position (or one random position)
+        start_pos = completion_start_pos
         if sample_one_position_per_seq:
-            pos = random.randint(0, seq_len - 1)
+            pos = random.randint(start_pos, seq_len - 1)
             pred_score = all_preds[pos].item()
             error = abs(pred_score - true_score)
-            positions.append(pos)
+            positions.append(pos - start_pos)  # Offset so 0 = completion start
             errors.append(error)
             example_ids.append(i)
             true_scores_list.append(true_score)
         else:
-            for pos in range(seq_len):
+            for pos in range(start_pos, seq_len):
                 pred_score = all_preds[pos].item()
                 error = abs(pred_score - true_score)
-                positions.append(pos)
+                positions.append(pos - start_pos)  # Offset so 0 = completion start
                 errors.append(error)
                 example_ids.append(i)
                 true_scores_list.append(true_score)
