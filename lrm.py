@@ -1073,3 +1073,126 @@ if analyze_seq_len_vs_error:
     }).round(3)
     print(f"\n{yellow}Mean probe error by sequence length bin:{endc}")
     print(binned_stats)
+
+#%% sequence position vs probe accuracy (per-position analysis)
+
+from utils import LinearProbe
+
+analyze_position_vs_accuracy = True
+if analyze_position_vs_accuracy:
+    import pandas as pd
+    
+    # Configuration
+    probe_hash = "68dd0ef91688"  # qwen dpo probe
+    dataset_id = "eekay/ultrafeedback-balanced"
+    n_samples = 100  # Fewer samples since we're doing per-position analysis
+    
+    # Load probe and dataset
+    probe = LinearProbe.load(model, probe_hash)
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    print(f"{green}Loaded probe {probe.hash_name} (layer {probe.layer}){endc}")
+    
+    positions = []
+    errors = []
+    example_ids = []
+    true_scores_list = []
+    
+    for i, ex in enumerate(tqdm(dataset, total=n_samples, desc="Analyzing per-position accuracy")):
+        if i >= n_samples:
+            break
+        
+        # Tokenize conversation
+        messages = [
+            {"role": "user", "content": ex["prompt"]},
+            {"role": "assistant", "content": ex["response"]}
+        ]
+        conversation_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(DEVICE)
+        
+        seq_len = conversation_toks.shape[0]
+        if seq_len >= model.cfg.n_ctx:
+            continue
+        
+        true_score = ex["score"]
+        
+        # Get activations at all positions
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                conversation_toks,
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            all_acts = cache[probe.act_name].squeeze().to(probe.dtype)  # [seq_len, d_model]
+            del cache
+            
+            # Get probe predictions at each position
+            all_preds = probe.forward(all_acts) * 5 + 5  # [seq_len]
+        
+        # Record error at each position
+        for pos in range(seq_len):
+            pred_score = all_preds[pos].item()
+            error = abs(pred_score - true_score)
+            
+            positions.append(pos)
+            errors.append(error)
+            example_ids.append(i)
+            true_scores_list.append(true_score)
+    
+    t.cuda.empty_cache()
+    
+    # Create dataframe
+    df = pd.DataFrame({
+        "position": positions,
+        "probe_error": errors,
+        "example_id": example_ids,
+        "true_score": true_scores_list,
+    })
+    
+    # Scatter plot: position vs probe error (with low opacity due to many points)
+    fig = px.scatter(
+        df,
+        x="position",
+        y="probe_error",
+        color="true_score",
+        color_continuous_scale="Viridis",
+        labels={
+            "position": "Sequence Position",
+            "probe_error": "Probe Error (|pred - true|)",
+            "true_score": "True Score",
+        },
+        title=f"Sequence Position vs Probe Error (probe: {probe.hash_name}, n_examples={n_samples})",
+        template="plotly_dark",
+        height=600,
+        width=1000,
+        opacity=0.3,
+    )
+    fig.show()
+    
+    # Aggregate: mean error by position (binned)
+    df["position_bin"] = pd.cut(df["position"], bins=20)
+    mean_by_position = df.groupby("position_bin", observed=True)["probe_error"].mean().reset_index()
+    mean_by_position["position_mid"] = mean_by_position["position_bin"].apply(lambda x: x.mid)
+    
+    fig2 = px.line(
+        mean_by_position,
+        x="position_mid",
+        y="probe_error",
+        labels={
+            "position_mid": "Sequence Position (bin midpoint)",
+            "probe_error": "Mean Probe Error",
+        },
+        title=f"Mean Probe Error by Sequence Position (probe: {probe.hash_name})",
+        template="plotly_dark",
+        height=500,
+        width=900,
+        markers=True,
+    )
+    fig2.show()
+    
+    # Print summary statistics
+    print(f"\n{cyan}Overall mean probe error: {df['probe_error'].mean():.3f}{endc}")
+    print(f"{cyan}Error at position 0-50: {df[df['position'] <= 50]['probe_error'].mean():.3f}{endc}")
+    print(f"{cyan}Error at position 50-200: {df[(df['position'] > 50) & (df['position'] <= 200)]['probe_error'].mean():.3f}{endc}")
+    print(f"{cyan}Error at position 200+: {df[df['position'] > 200]['probe_error'].mean():.3f}{endc}")
