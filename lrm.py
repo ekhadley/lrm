@@ -1464,3 +1464,163 @@ if mcts_search:
             
     print(f"\n\n{green}Final Generation:{endc}")
     print(model.tokenizer.decode(curr_ids[0], skip_special_tokens=True))
+
+#%% bar chart of probe rewards for steering completions
+
+import glob
+import re
+import plotly.graph_objects as go
+from utils import LinearProbe
+
+visualize_steering_probe_rewards = True
+if visualize_steering_probe_rewards:
+    # === PARAMETERS ===
+    model_name = "Mistral-7B-Instruct-v0.1_dpo"  # Change this to match your model
+    mistral_dpo_probe_hash = "8034c7a96c75"
+    qwen_dpo_probe_hash = "68dd0ef91688"
+    probe_hash = mistral_dpo_probe_hash  # Use appropriate probe for your model
+    
+    # === Find all steering completion files for this model ===
+    data_dir = "./data"
+    pattern = f"{data_dir}/{model_name}_probe_steer_s*_completions.json"
+    steering_files = glob.glob(pattern)
+    
+    # Also include the base model (no steering, s=0) if it exists
+    base_file = f"{data_dir}/{model_name}_completions.json"
+    if os.path.exists(base_file):
+        steering_files.append(base_file)
+    
+    if not steering_files:
+        print(f"{red}No steering completion files found matching pattern: {pattern}{endc}")
+    else:
+        print(f"{lime}Found {len(steering_files)} steering completion files:{endc}")
+        for f in steering_files:
+            print(f"  - {f}")
+        
+        # Extract strength from filename
+        def extract_strength(filepath):
+            basename = os.path.basename(filepath)
+            # Match patterns like _probe_steer_s4.0_ or _probe_steer_s-8.0_
+            match = re.search(r'_probe_steer_s(-?\d+\.?\d*)_', basename)
+            if match:
+                return float(match.group(1))
+            # If no match, it's the base model (no steering)
+            return 0.0
+        
+        # Load probe
+        probe = LinearProbe.load(model, probe_hash)
+        print(f"{cyan}Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name}){endc}")
+        
+        # Collect all completions with their steering strengths
+        all_rows = []
+        
+        for filepath in tqdm(steering_files, desc="Processing steering files"):
+            strength = extract_strength(filepath)
+            
+            with open(filepath, "r") as f:
+                data = json.load(f)
+            
+            completions = data.get("completions", [])
+            
+            for entry in tqdm(completions, desc=f"s={strength}", leave=False):
+                prompt = entry.get("prompt", "")
+                # new_response is the steered completion
+                response = entry.get("new_response", "")
+                
+                if not response:
+                    continue
+                
+                # Build conversation and tokenize
+                messages = [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response}
+                ]
+                conversation_toks = model.tokenizer.apply_chat_template(
+                    messages,
+                    return_tensors="pt",
+                ).squeeze().to(DEVICE)
+                
+                seq_len = conversation_toks.shape[0]
+                if seq_len >= model.cfg.n_ctx:
+                    continue
+                
+                # Get activation at last position and compute probe prediction
+                with t.inference_mode():
+                    _, cache = model.run_with_cache(
+                        conversation_toks,
+                        stop_at_layer=probe.layer + 1,
+                        names_filter=[probe.act_name]
+                    )
+                    target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+                    del cache
+                    
+                    probe_reward = probe.get_pred(target_act)
+                
+                all_rows.append({
+                    "steering_strength": strength,
+                    "probe_reward": probe_reward,
+                    "idx": entry.get("idx"),
+                })
+        
+        t.cuda.empty_cache()
+        
+        df = pd.DataFrame(all_rows)
+        print(f"\n{green}Collected {len(df)} samples across {df['steering_strength'].nunique()} steering strengths{endc}")
+        
+        # Compute average probe reward for each steering strength
+        avg_rewards = df.groupby("steering_strength")["probe_reward"].agg(["mean", "std", "count"]).reset_index()
+        avg_rewards.columns = ["steering_strength", "avg_probe_reward", "std", "count"]
+        avg_rewards = avg_rewards.sort_values("steering_strength")
+        
+        print(f"\n{cyan}Average probe rewards by steering strength:{endc}")
+        for _, row in avg_rewards.iterrows():
+            print(f"  s={row['steering_strength']:+.1f}: mean={row['avg_probe_reward']:.3f}, std={row['std']:.3f}, n={row['count']}")
+        
+        # Create bar chart
+        # Create a string label for x-axis that preserves order
+        avg_rewards["strength_label"] = avg_rewards["steering_strength"].apply(
+            lambda x: f"s={x:+.1f}" if x != 0 else "no steering"
+        )
+        
+        # Color gradient from red (negative) through gray (0) to green (positive)
+        def get_color(strength):
+            if strength < 0:
+                # Red gradient for negative
+                intensity = min(1.0, abs(strength) / 8.0)
+                return f"rgba({int(200 + 55*intensity)}, {int(100 - 50*intensity)}, {int(100 - 50*intensity)}, 0.8)"
+            elif strength > 0:
+                # Green gradient for positive
+                intensity = min(1.0, abs(strength) / 8.0)
+                return f"rgba({int(100 - 50*intensity)}, {int(200 + 55*intensity)}, {int(100 - 50*intensity)}, 0.8)"
+            else:
+                return "rgba(150, 150, 150, 0.8)"
+        
+        avg_rewards["color"] = avg_rewards["steering_strength"].apply(get_color)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=avg_rewards["strength_label"],
+            y=avg_rewards["avg_probe_reward"],
+            marker_color=avg_rewards["color"],
+            error_y=dict(
+                type='data',
+                array=avg_rewards["std"],
+                visible=True
+            ),
+            text=avg_rewards["avg_probe_reward"].apply(lambda x: f"{x:.2f}"),
+            textposition='outside',
+        ))
+        
+        fig.update_layout(
+            title=f"Average Probe Reward by Steering Strength<br><sub>Model: {model_name}</sub>",
+            xaxis_title="Steering Strength",
+            yaxis_title="Average Probe Reward",
+            template="plotly_dark",
+            height=600,
+            width=900,
+            showlegend=False,
+        )
+        
+        fig.show()
+        fig.write_html(f"./figures/steering_probe_rewards_{model_name}.html")
+        print(f"{green}Saved figure to ./figures/steering_probe_rewards_{model_name}.html{endc}")
