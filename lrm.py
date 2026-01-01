@@ -982,6 +982,107 @@ if test_probe_steering:
         print(completion.strip())
         print()
 
+#%% generate completions with probe steering
+
+from utils import LinearProbe
+
+generate_probe_steered_completions = True
+if generate_probe_steered_completions:
+    # Configuration
+    # probe_hash = "68dd0ef91688"  # qwen dpo probe
+    probe_hash = "8034c7a96c75"  # mistral dpo probe
+
+    steering_strength = -4.0
+    
+    dataset_id = "eekay/ultrafeedback-balanced"
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    
+    model_name = f"{MODEL_NAME}_probe_steer_s{steering_strength}"
+    n_target_completions = 512
+    max_seq_len = model.cfg.n_ctx - 1
+    save_every = 10
+    completions_path = f"./data/{model_name}_completions.json"
+    
+    # Load probe and get normalized steering direction
+    probe = LinearProbe.load(model, probe_hash)
+    probe_dir = probe.probe.squeeze()
+    probe_dir = probe_dir / probe_dir.norm()
+    print(f"{green}Loaded probe {probe.hash_name} (layer {probe.layer}){endc}")
+    print(f"{green}Steering strength: {steering_strength}{endc}")
+    
+    # Steering hook
+    def steering_hook(resid, hook):
+        return resid + steering_strength * probe_dir
+    
+    # Load existing completions if file exists
+    os.makedirs("./data", exist_ok=True)
+    if os.path.exists(completions_path):
+        with open(completions_path, "r") as f:
+            data = json.load(f)
+            completions = {c["idx"]: c for c in data.get("completions", [])}
+    else:
+        completions = {}
+    
+    # Check if we already have enough
+    if len(completions) >= n_target_completions:
+        print(f"{green}Already have {len(completions)} completions, skipping generation{endc}")
+    else:
+        for idx in (bar := tqdm(range(len(dataset)), total=n_target_completions)):
+            if len(completions) >= n_target_completions:
+                break
+            if idx in completions:
+                continue
+            
+            ex = dataset[idx]
+            user_prompt_toks = model.tokenizer.apply_chat_template(
+                [{"role": "user", "content": ex["prompt"]}],
+                return_tensors="pt",
+                add_generation_prompt=True,
+            ).to(DEVICE)
+            user_prompt_len = user_prompt_toks.shape[-1]
+            
+            max_new_tokens = max_seq_len - user_prompt_len
+            if max_new_tokens <= 16:
+                continue
+            
+            # Generate with steering
+            with model.hooks([(probe.act_name, steering_hook)]):
+                response_toks = model.generate(
+                    user_prompt_toks,
+                    do_sample=True,
+                    verbose=False,
+                    max_new_tokens=max_new_tokens
+                ).squeeze()
+            
+            prompt_completion_len = response_toks.shape[-1]
+            completion_len = prompt_completion_len - user_prompt_len
+            if prompt_completion_len >= max_seq_len - 1:
+                continue
+            
+            # Decode just the completion
+            completion_only_toks = response_toks[user_prompt_len:]
+            completion_text = model.tokenizer.decode(completion_only_toks, skip_special_tokens=True)
+            
+            completions[idx] = {
+                "idx": idx,
+                **dict(ex),
+                "new_response": completion_text,
+            }
+            
+            bar.set_description(f"{lime}[{len(completions)}/{n_target_completions}] generated {user_prompt_len}+{completion_len} toks{endc}")
+            
+            # Periodically save
+            if len(completions) % save_every == 0:
+                with open(completions_path, "w") as f:
+                    json.dump({"model": model_name, "completions": list(completions.values())}, f, indent=2)
+        
+        # Final save
+        with open(completions_path, "w") as f:
+            json.dump({"model": model_name, "completions": list(completions.values())}, f, indent=2)
+        print(f"{green}Saved {len(completions)} completions to {completions_path}{endc}")
+    
+    t.cuda.empty_cache()
+
 #%% sequence length vs probe error analysis
 
 from utils import LinearProbe
