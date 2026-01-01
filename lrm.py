@@ -1209,7 +1209,6 @@ if analyze_position_vs_accuracy:
         height=500,
         width=900,
         markers=True,
-        range_y=[0, 10]
     )
     fig2.show()
     
