@@ -1086,6 +1086,7 @@ if analyze_position_vs_accuracy:
     probe_hash = "ec50cdd816fa"  # qwen dpo probe
     dataset_id = "eekay/ultrafeedback-balanced"
     n_samples = 100  # Fewer samples since we're doing per-position analysis
+    sample_one_position_per_seq = False  # If True, sample one random position per sequence
     
     # Load probe and dataset
     probe = LinearProbe.load(model, probe_hash)
@@ -1130,15 +1131,23 @@ if analyze_position_vs_accuracy:
             # Get probe predictions at each position
             all_preds = probe.forward(all_acts) * 5 + 5  # [seq_len]
         
-        # Record error at each position
-        for pos in range(seq_len):
+        # Record error at each position (or one random position)
+        if sample_one_position_per_seq:
+            pos = random.randint(0, seq_len - 1)
             pred_score = all_preds[pos].item()
             error = abs(pred_score - true_score)
-            
             positions.append(pos)
             errors.append(error)
             example_ids.append(i)
             true_scores_list.append(true_score)
+        else:
+            for pos in range(seq_len):
+                pred_score = all_preds[pos].item()
+                error = abs(pred_score - true_score)
+                positions.append(pos)
+                errors.append(error)
+                example_ids.append(i)
+                true_scores_list.append(true_score)
     
     t.cuda.empty_cache()
     
