@@ -968,3 +968,108 @@ if test_probe_steering:
         print(f"{yellow}[strength={strength:+.1f}]{endc}")
         print(completion.strip())
         print()
+
+#%% sequence length vs probe error analysis
+
+from utils import LinearProbe
+
+analyze_seq_len_vs_error = True
+if analyze_seq_len_vs_error:
+    import pandas as pd
+    
+    # Configuration
+    probe_hash = "68dd0ef91688"  # qwen dpo probe
+    dataset_id = "eekay/ultrafeedback-balanced"
+    n_samples = 500
+    
+    # Load probe and dataset
+    probe = LinearProbe.load(model, probe_hash)
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    print(f"{green}Loaded probe {probe.hash_name} (layer {probe.layer}){endc}")
+    print(f"{green}Dataset: {dataset_id} ({len(dataset)} examples){endc}")
+    
+    seq_lengths = []
+    probe_errors = []
+    true_scores = []
+    pred_scores = []
+    
+    for i, ex in enumerate(tqdm(dataset, total=n_samples, desc="Computing probe errors")):
+        if i >= n_samples:
+            break
+        
+        # Tokenize conversation
+        messages = [
+            {"role": "user", "content": ex["prompt"]},
+            {"role": "assistant", "content": ex["response"]}
+        ]
+        conversation_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(DEVICE)
+        
+        seq_len = conversation_toks.shape[0]
+        if seq_len >= model.cfg.n_ctx:
+            continue
+        
+        true_score = ex["score"]
+        
+        # Get probe prediction at last position
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                conversation_toks,
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
+            del cache
+            
+            pred_score = probe.get_pred(target_act)
+        
+        probe_error = abs(pred_score - true_score)
+        
+        seq_lengths.append(seq_len)
+        probe_errors.append(probe_error)
+        true_scores.append(true_score)
+        pred_scores.append(pred_score)
+    
+    t.cuda.empty_cache()
+    
+    # Create dataframe
+    df = pd.DataFrame({
+        "seq_len": seq_lengths,
+        "probe_error": probe_errors,
+        "true_score": true_scores,
+        "pred_score": pred_scores,
+    })
+    
+    # Scatter plot: sequence length vs probe error
+    fig = px.scatter(
+        df,
+        x="seq_len",
+        y="probe_error",
+        color="true_score",
+        color_continuous_scale="Viridis",
+        labels={
+            "seq_len": "Sequence Length (tokens)",
+            "probe_error": "Probe Error (|pred - true|)",
+            "true_score": "True Score",
+        },
+        title=f"Sequence Length vs Probe Error (probe: {probe.hash_name}, n={len(df)})",
+        template="plotly_dark",
+        height=600,
+        width=900,
+        opacity=0.6,
+    )
+    fig.show()
+    
+    # Print correlation
+    corr = df["seq_len"].corr(df["probe_error"])
+    print(f"\n{cyan}Correlation between seq_len and probe_error: {corr:.3f}{endc}")
+    
+    # Bin by sequence length and show mean error per bin
+    df["seq_len_bin"] = pd.cut(df["seq_len"], bins=10)
+    binned_stats = df.groupby("seq_len_bin", observed=True).agg({
+        "probe_error": ["mean", "std", "count"]
+    }).round(3)
+    print(f"\n{yellow}Mean probe error by sequence length bin:{endc}")
+    print(binned_stats)
