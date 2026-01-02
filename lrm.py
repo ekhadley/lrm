@@ -1782,6 +1782,10 @@ if run_mcts_search:
             node = node.parent
     
     # ==================== MAIN MCTS LOOP ====================
+    # Verbosity settings
+    VERBOSE = True           # Show detailed search info per token
+    SHOW_TOP_N_CHILDREN = 5  # How many top children to display
+    
     # Tokenize prompt
     prompt_ids = model.tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],
@@ -1799,6 +1803,11 @@ if run_mcts_search:
         # Create fresh tree for this token position
         root = MCTSNode(token_id=None, parent=None, prior=1.0)
         expand_node(root, current_ids)  # Pre-expand root
+        
+        # Track best rollout during search
+        best_rollout_reward = float('-inf')
+        best_rollout_text = ""
+        best_rollout_probe = 0.0
         
         # Run simulations
         for sim in range(N_SIMULATIONS):
@@ -1819,34 +1828,64 @@ if run_mcts_search:
             rollout_seq = greedy_rollout(leaf_seq, ROLLOUT_LEN)
             
             # Evaluation
-            combined_reward, _ = evaluate_sequence(rollout_seq, prompt_len)
+            combined_reward, probe_score = evaluate_sequence(rollout_seq, prompt_len)
+            
+            # Track best rollout
+            if combined_reward > best_rollout_reward:
+                best_rollout_reward = combined_reward
+                best_rollout_probe = probe_score
+                # Decode just the new tokens from this rollout
+                rollout_new_tokens = rollout_seq[0, prompt_len:].tolist()
+                best_rollout_text = model.tokenizer.decode(rollout_new_tokens, skip_special_tokens=True)
             
             # Backpropagation
             backpropagate(node, combined_reward)
+            
+            # Live progress indicator
+            if VERBOSE and (sim + 1) % 10 == 0:
+                print(f"\r{gray}  Step {step+1}: sim {sim+1}/{N_SIMULATIONS}, best reward: {best_rollout_reward:.3f}, probe: {best_rollout_probe:.2f}{endc}", end="", flush=True)
         
         # Select best action (most visited child)
         if not root.children:
             print(f"\n{red}No children expanded, stopping.{endc}")
             break
         
-        best_child = max(root.children.values(), key=lambda n: n.visits)
+        # Sort children by visits
+        sorted_children = sorted(root.children.values(), key=lambda n: n.visits, reverse=True)
+        best_child = sorted_children[0]
         best_token_id = best_child.token_id
+        
+        # Verbose output for this step
+        if VERBOSE:
+            print(f"\r{' '*80}\r", end="")  # Clear the progress line
+            print(f"\n{cyan}━━━ Step {step+1} ━━━{endc}")
+            print(f"{yellow}Best rollout:{endc} \"{best_rollout_text[:80]}{'...' if len(best_rollout_text) > 80 else ''}\"")
+            print(f"{yellow}Best rollout reward:{endc} {best_rollout_reward:.3f} (probe: {best_rollout_probe:.2f})")
+            print(f"{yellow}Top {min(SHOW_TOP_N_CHILDREN, len(sorted_children))} candidates:{endc}")
+            for i, child in enumerate(sorted_children[:SHOW_TOP_N_CHILDREN]):
+                token_str = model.tokenizer.decode([child.token_id]).replace('\n', '\\n')
+                print(f"  {i+1}. '{token_str}' | visits: {child.visits:3d} | Q: {child.q_value:+.3f} | prior: {child.prior:.3f}")
+            print(f"{green}Selected:{endc} '{model.tokenizer.decode([best_token_id]).replace(chr(10), '\\n')}' (visits: {best_child.visits})")
         
         # Add token to sequence
         generated_tokens.append(best_token_id)
         current_ids = t.cat([current_ids, t.tensor([[best_token_id]], device=DEVICE)], dim=1)
         
-        # Print token as we go
-        token_str = model.tokenizer.decode([best_token_id])
-        print(token_str, end="", flush=True)
-        
-        # Show stats periodically
-        if (step + 1) % 10 == 0:
-            _, probe_score = evaluate_sequence(current_ids, prompt_len)
-            print(f" {gray}[step {step+1}, probe: {probe_score:.2f}]{endc}", end="")
+        # Show current generation so far
+        if VERBOSE:
+            current_text = model.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            print(f"{purple}Generated so far:{endc} {current_text}")
+        else:
+            # Non-verbose: just print token
+            token_str = model.tokenizer.decode([best_token_id])
+            print(token_str, end="", flush=True)
+            if (step + 1) % 10 == 0:
+                _, probe_score = evaluate_sequence(current_ids, prompt_len)
+                print(f" {gray}[step {step+1}, probe: {probe_score:.2f}]{endc}", end="")
         
         # Stop at EOS
         if best_token_id == model.tokenizer.eos_token_id:
+            print(f"\n{green}[EOS reached]{endc}")
             break
     
     # ==================== FINAL OUTPUT ====================
