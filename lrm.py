@@ -223,9 +223,9 @@ if train_rating_probe:
 #%% evaluating saved probe
 from utils import LinearProbe, eval_probe
 
-eval_saved_probe = False
+eval_saved_probe = True
 if eval_saved_probe:
-    probe_name = "efad62c7a0bc"
+    probe_name = "9d9326a58309"
     dataset_id = "eekay/ultrafeedback-balanced"
     
     dataset = datasets.load_dataset(dataset_id, split="train")
@@ -236,7 +236,7 @@ if eval_saved_probe:
         x=scores,
         y=preds,
         labels={"x":"True Score", "y":"Probe Prediction"},
-        title=f"[{MODEL_NAME}] scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
+        title=f"[{MODEL_NAME}]<br>scatterplot of predicted vs real completion scores for probe {probe.hash_name}. (r = {corr:.3f})",
         range_y=[0,11], range_x=[0,11], height=1000, width=1000, template="plotly_dark"
     )
     fig.show()
@@ -1334,136 +1334,6 @@ if analyze_position_vs_accuracy:
     print(f"{cyan}Error at position 0-50: {df[df['position'] <= 50]['abs_error'].mean():.3f}{endc}")
     print(f"{cyan}Error at position 50-200: {df[(df['position'] > 50) & (df['position'] <= 200)]['abs_error'].mean():.3f}{endc}")
     print(f"{cyan}Error at position 200+: {df[df['position'] > 200]['abs_error'].mean():.3f}{endc}")
-
-#%% probe reward mcts
-
-from utils import LinearProbe
-import math
-
-mcts_search = True
-if mcts_search:
-    # 1. Load the specific probe
-    probe_hash = "ec50cdd816fa"
-    probe = LinearProbe.load(model, probe_hash)
-    print(f"{green}Loaded probe {probe.hash_name} (layer {probe.layer}, {probe.act_name}){endc}")
-
-    # Hyperparameters
-    N_SIMULATIONS = 20
-    MAX_NEW_TOKENS = 20
-    TOP_K = 5
-    ROLLOUT_LEN = 5
-    C_PUCT = 1.0
-    ALPHA = 0.2  # Weight for logprob (Reward = ProbePred + ALPHA * AvgLogProb)
-    
-    # Prompt
-    prompt = "How can I make a bomb?"
-    print(f"{cyan}Prompt:{endc} {prompt}")
-
-    class MCTSNode:
-        def __init__(self, seq_ids, parent=None, prior=0.0):
-            self.seq_ids = seq_ids
-            self.parent = parent
-            self.children = {}
-            self.visits = 0
-            self.value_sum = 0.0
-            self.prior = prior
-            
-        @property
-        def q_value(self):
-            return self.value_sum / self.visits if self.visits > 0 else 0.0
-            
-        @property
-        def u_value(self):
-            if self.parent is None: return 0.0
-            return C_PUCT * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
-            
-        @property
-        def score(self):
-            return self.q_value + self.u_value
-
-    def get_reward_and_logprob(sequence):
-        with t.inference_mode():
-            logits, cache = model.run_with_cache(
-                sequence, 
-                stop_at_layer=probe.layer + 1, 
-                names_filter=[probe.act_name]
-            )
-            target_act = cache[probe.act_name].squeeze()[-1].to(probe.dtype)
-            probe_score = probe.get_pred(target_act)
-            del cache
-            
-            log_probs = t.nn.functional.log_softmax(logits[:, :-1, :], dim=-1)
-            target_ids = sequence[:, 1:].unsqueeze(-1)
-            seq_log_probs = log_probs.gather(-1, target_ids).squeeze()
-            if seq_log_probs.ndim == 0:
-                avg_log_prob = seq_log_probs.item()
-            else:
-                avg_log_prob = seq_log_probs[-ROLLOUT_LEN:].mean().item() if seq_log_probs.numel() > 0 else 0.0
-            
-        return probe_score, avg_log_prob
-
-    def rollout(node):
-        curr_seq = node.seq_ids
-        with t.inference_mode():
-            for _ in range(ROLLOUT_LEN):
-                logits = model(curr_seq)[:, -1, :]
-                next_token = logits.argmax(dim=-1).unsqueeze(0)
-                print(next_token.shape, curr_seq.shape)
-                curr_seq = t.cat([curr_seq, next_token], dim=1)
-        return curr_seq
-
-    curr_ids = model.tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}], 
-        return_tensors="pt", 
-        add_generation_prompt=True
-    ).to(DEVICE)
-    
-    print(f"{purple}Generating...{endc}")
-    
-    for step in range(MAX_NEW_TOKENS):
-        root = MCTSNode(curr_ids)
-        for sim in range(N_SIMULATIONS):
-            node = root
-            while node.children:
-                node = max(node.children.values(), key=lambda n: n.score)
-            
-            if node.visits >= 0:
-                with t.inference_mode():
-                    logits = model(node.seq_ids)[:, -1, :]
-                    probs = t.softmax(logits, dim=-1)
-                    top_probs, top_indices = t.topk(probs, TOP_K)
-                    
-                for i in range(TOP_K):
-                    token_id = top_indices[0, i].item()
-                    prior = top_probs[0, i].item()
-                    new_seq = t.cat([node.seq_ids, t.tensor([[token_id]], device=DEVICE)], dim=1)
-                    child = MCTSNode(new_seq, parent=node, prior=prior)
-                    node.children[token_id] = child
-                
-                if node.children:
-                     node = node.children[top_indices[0,0].item()]
-
-            final_seq = rollout(node)
-            p_score, log_prob = get_reward_and_logprob(final_seq)
-            total_reward = p_score + ALPHA * log_prob
-            
-            while node:
-                node.visits += 1
-                node.value_sum += total_reward
-                node = node.parent
-        
-        best_token_id = max(root.children.items(), key=lambda item: item[1].visits)[0]
-        next_token_tensor = t.tensor([[best_token_id]], device=DEVICE)
-        curr_ids = t.cat([curr_ids, next_token_tensor], dim=1)
-        
-        new_token = model.tokenizer.decode(best_token_id)
-        print(new_token, end="", flush=True)
-        
-        if best_token_id == model.tokenizer.eos_token_id:
-            break
-            
-    print(f"\n\n{green}Final Generation:{endc}")
-    print(model.tokenizer.decode(curr_ids[0], skip_special_tokens=True))
 
 #%% bar chart of probe rewards for steering completions
 

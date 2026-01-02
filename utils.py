@@ -220,7 +220,14 @@ def eval_probe(model, probe: LinearProbe, dataset, n_samples):
     for i, ex in enumerate(tqdm(dataset, total=n_samples)):
         if i >= n_samples:
             break
-            
+
+        prompt_only_toks = model.tokenizer.apply_chat_template(
+            [{"role":"user","content": ex["prompt"]}],
+            return_tensors="pt",
+            add_generation_prompt=True
+        ).squeeze().to(model.cfg.device)
+        prompt_len = prompt_only_toks.shape[0]
+
         messages = [{"role":"user","content": ex["prompt"]}, {"role":"assistant","content":ex["response"]}]
         prompt_toks = model.tokenizer.apply_chat_template(
             messages,
@@ -239,7 +246,8 @@ def eval_probe(model, probe: LinearProbe, dataset, n_samples):
                 names_filter=[probe.act_name]
             )
             act = cache[probe.act_name].squeeze().to(probe.dtype)
-            target_act = act[-1]
+            target_act = act[prompt_len-1]
+            # target_act = act[-1]
             
             probe_act = probe.forward(target_act).item()
             probe_pred = probe_act*5 + 5
