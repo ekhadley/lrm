@@ -243,6 +243,77 @@ if eval_saved_probe:
     
     t.cuda.empty_cache()
 
+#%% collect completions + probe predictions by rating category
+from utils import LinearProbe
+
+collect_by_category = True
+if collect_by_category:
+    probe_name = "9d9326a58309"
+    dataset_id = "eekay/ultrafeedback-balanced"
+    n_samples = 256
+    
+    dataset = datasets.load_dataset(dataset_id, split="train")
+    probe = LinearProbe.load(model, probe_name)
+    
+    # Dict with keys as ground truth ratings, values as lists of entries
+    completions_by_rating = {}
+    
+    for i, ex in enumerate(tqdm(dataset, total=n_samples)):
+        if i >= n_samples:
+            break
+        
+        prompt_only_toks = model.tokenizer.apply_chat_template(
+            [{"role": "user", "content": ex["prompt"]}],
+            return_tensors="pt",
+            add_generation_prompt=True
+        ).squeeze().to(model.cfg.device)
+        prompt_len = prompt_only_toks.shape[0]
+        
+        messages = [{"role": "user", "content": ex["prompt"]}, {"role": "assistant", "content": ex["response"]}]
+        prompt_toks = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+        ).squeeze().to(model.cfg.device)
+        seq_len = prompt_toks.shape[0]
+        if seq_len >= model.cfg.n_ctx:
+            continue
+        
+        score = ex["score"]
+        
+        with t.inference_mode():
+            _, cache = model.run_with_cache(
+                prompt_toks,
+                stop_at_layer=probe.layer + 1,
+                names_filter=[probe.act_name]
+            )
+            act = cache[probe.act_name].squeeze().to(probe.dtype)
+            target_act = act[prompt_len - 1]
+            del cache
+            
+            probe_act = probe.forward(target_act).item()
+            probe_pred = probe_act * 5 + 5
+        
+        # Create entry with dataset row + probe prediction
+        entry = {
+            **dict(ex),
+            "probe_prediction": probe_pred,
+        }
+        
+        # Add to the appropriate rating bucket
+        rating_key = int(score)
+        if rating_key not in completions_by_rating:
+            completions_by_rating[rating_key] = []
+        completions_by_rating[rating_key].append(entry)
+    
+    t.cuda.empty_cache()
+    
+    # Print summary
+    print(f"\n{cyan}Completions collected by rating:{endc}")
+    for rating in sorted(completions_by_rating.keys()):
+        entries = completions_by_rating[rating]
+        avg_pred = sum(e["probe_prediction"] for e in entries) / len(entries)
+        print(f"  Rating {rating}: {len(entries)} samples, avg probe pred: {avg_pred:.2f}")
+
 #%% generate completions from the post-trained model
 
 generate_new_completions = True
